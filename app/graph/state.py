@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 class EditOperation(BaseModel):
     """A single edit operation in the planner output."""
 
+    # op 定义操作类型；region 指向局部区域；strength 控制强度；
+    # params 预留给不同操作扩展额外参数。
     op: Literal[
         "global_exposure",
         "local_exposure",
@@ -33,6 +35,9 @@ class EditOperation(BaseModel):
 class EditPlan(BaseModel):
     """Structured edit plan produced by the planner."""
 
+    # mode 表示显式修图还是自动修图；
+    # executor 决定走哪类执行器；
+    # preserve 用于声明必须保留的约束，例如身份、自然感等。
     mode: Literal["explicit", "auto"]
     domain: Literal["portrait", "landscape", "food", "document", "general"]
     executor: Literal["deterministic", "generative", "hybrid"]
@@ -46,6 +51,7 @@ class EditPlan(BaseModel):
 class PreferenceMemory(BaseModel):
     """User preference entry persisted in long-term memory."""
 
+    # 一条长期偏好记录，既可以来自用户显式表达，也可以来自行为证据。
     user_id: str
     domain: Literal["portrait", "landscape", "food", "document", "general"]
     key: str
@@ -64,18 +70,31 @@ class PreferenceMemory(BaseModel):
 class EditState(TypedDict, total=False):
     """LangGraph state for an edit thread."""
 
+    # messages: 对话消息历史
+    # user_id/thread_id: 用户与线程标识
+    # input_images: 当前输入图片
     messages: Annotated[list, add_messages]
     user_id: str
     thread_id: str
     input_images: list[str]
+
+    # 理解与规划阶段产物
     mode: str
     image_analysis: dict[str, Any] | None
     retrieved_prefs: list[dict[str, Any]]
     edit_plan: dict[str, Any] | None
+
+    # 执行阶段产物
     masks: list[str]
     candidate_outputs: list[str]
+
+    # 评估与结果阶段产物
     eval_report: dict[str, Any] | None
     selected_output: str | None
+
+    # 长期记忆写回候选
     memory_write_candidates: list[dict[str, Any]]
+
+    # 人工审核控制字段
     approval_required: bool
     approval_payload: dict[str, Any] | None
