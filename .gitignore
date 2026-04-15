@@ -1,0 +1,29 @@
+# macOS / editor
+.DS_Store
+.vscode/
+
+# Python cache / tooling cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Local test artifacts
+tests/output/
+tests/*.jpg
+tests/*.jpeg
+tests/*.png
+tests/*.webp
+tests/*.heic
+tests/*.tif
+tests/*.tiff
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+*.secrets
+aliyun.env
+aliyun.local.env

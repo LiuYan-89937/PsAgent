@@ -1,0 +1,7 @@
+Pillow
+pydantic
+numpy
+opencv-python-headless
+alibabacloud_imageseg20191230
+alibabacloud_tea_openapi
+alibabacloud_tea_util

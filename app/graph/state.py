@@ -12,23 +12,20 @@ from pydantic import BaseModel, Field
 class EditOperation(BaseModel):
     """A single edit operation in the planner output."""
 
-    # op 定义操作类型；region 指向局部区域；strength 控制强度；
-    # params 预留给不同操作扩展额外参数。
+    # op 对齐工具包唯一标识；region 指向 whole_image 或局部区域；
+    # strength 使用抽象强度，后续由参数归一化层转换成内部参数。
     op: Literal[
-        "global_exposure",
-        "local_exposure",
-        "contrast",
-        "white_balance",
+        "adjust_exposure",
+        "adjust_highlights_shadows",
+        "adjust_contrast",
+        "adjust_white_balance",
+        "adjust_vibrance_saturation",
+        "crop_and_straighten",
         "denoise",
         "sharpen",
-        "crop",
-        "background_blur",
-        "remove_object",
-        "replace_background",
-        "inpaint_region",
     ]
     region: str | None = None
-    strength: float = Field(ge=0.0, le=1.0)
+    strength: float = Field(ge=-1.0, le=1.0)
     params: dict[str, Any] = Field(default_factory=dict)
 
 

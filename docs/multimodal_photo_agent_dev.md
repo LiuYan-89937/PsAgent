@@ -113,7 +113,7 @@
 
 ### 2.6 当前阶段的分割层决策
 
-当前阶段统一采用“阿里云分割能力 + 本地图像参数工具”的组合。
+当前项目整体仍然采用“阿里云分割能力 + 本地图像参数工具”的组合，但当前第一批工具包先不依赖分割。
 
 建议这样落地：
 
@@ -129,6 +129,12 @@
 1. 当前阶段不需要自部署分割模型。
 2. 区域能力和参数处理能力职责清晰。
 3. 后续如果要换供应商，只需要替换 `segmentation_tools.py` 的适配层。
+
+补充当前实施顺序：
+
+1. 第一批先落 8 个核心参数工具包，并先实现它们的 `whole_image` 模式，不依赖阿里云分割。
+2. 第二批再为其中一部分工具包增加 `person`、`main_subject`、`background` 这类局部 `region` 支持。
+3. 也就是说，阿里云分割能力是当前架构中的保留能力，但不是第一批实现的前置条件。
 
 ## 3. 核心模块设计
 
@@ -182,8 +188,8 @@
 
 对当前阶段，要再补一个明确判断：
 
-1. 主干执行器以 `deterministic` 为主。
-2. `hybrid` 主要用于“阿里云分割 + 本地局部增强”的组合链。
+1. 第一批主干执行器完全以 `deterministic` 为主。
+2. `hybrid` 主要留给第二批“同一批工具包切换到局部 `region` 模式”时使用。
 3. `generative` 继续保留架构位置，但暂时不是当前重点。
 
 ### 3.3.1 当前阶段推荐的工具包模式
@@ -193,13 +199,13 @@
 每个工具包只负责一类容易理解的编辑能力，例如：
 
 1. `adjust_exposure`
-2. `adjust_white_balance`
+2. `adjust_highlights_shadows`
 3. `adjust_contrast`
-4. `denoise`
-5. `sharpen`
+4. `adjust_white_balance`
+5. `adjust_vibrance_saturation`
 6. `crop_and_straighten`
-7. `subject_light_balance`
-8. `background_tone_balance`
+7. `denoise`
+8. `sharpen`
 
 每个工具包内部可以包含：
 
@@ -215,6 +221,194 @@
 1. 大模型负责“选包”和“给抽象参数”。
 2. 代码负责“补 mask”和“参数适配”。
 3. 工具函数只负责真正处理图像。
+
+### 3.3.2 当前工具包结构总结
+
+结合当前讨论，工具包层建议固定成下面这套结构。
+
+#### 设计原则
+
+当前更推荐把“声明能力”和“真正执行”分开。
+
+不要让一个工具包类同时承担：
+
+1. 给 LLM 暴露能力说明
+2. 管理执行前依赖
+3. 自己偷偷去拉 mask
+4. 调 OpenCV / Pillow / 云 API
+5. 处理审计和 fallback
+
+更稳的方式是拆成：
+
+1. `PackageSpec`
+   纯声明信息，给 Planner、注册表和审计层使用。
+2. `ToolPackage`
+   真正的执行对象，负责校验、归一化和执行。
+3. `PackageRegistry`
+   统一注册和导出。
+4. `Dispatcher`
+   根据工具包声明补齐前置依赖，例如 mask。
+
+#### `PackageSpec`
+
+建议先定义一个纯声明对象，而不是把所有字段都塞在基类上。
+
+建议至少包含：
+
+1. `name`
+   工具包唯一标识，例如 `adjust_exposure`。
+2. `description`
+   给 Planner 和开发者看的简短说明。
+3. `supported_regions`
+   支持哪些区域，例如 `whole_image`、`person`、`background`。
+4. `mask_policy`
+   是否需要 mask，建议使用：
+   `none / optional / required`
+5. `supported_domains`
+   适用于哪些图片域，例如 `portrait`、`general`。
+6. `risk_level`
+   风险等级，给审核和风控使用。
+7. `default_params`
+   默认参数，用来兜底和归一化。
+
+之所以推荐 `mask_policy` 而不是简单的 `requires_mask`，是因为：
+
+1. 有些包完全不需要 mask
+2. 有些包全局和局部都能做，mask 是可选项
+3. 有些包天生就是局部增强，mask 是必需项
+
+#### 工具包生命周期方法
+
+每个工具包建议统一实现下面这些方法：
+
+1. `get_llm_schema()`
+   导出给 LLM 的简化 schema。
+2. `validate(operation, context)`
+   校验模型给出的调用请求是否合法。
+3. `resolve_requirements(operation, context)`
+   判断是否需要 mask、是否需要主体信息等前置依赖。
+4. `normalize(operation, context)`
+   把抽象参数转成更稳定的内部参数。
+5. `execute(operation, context)`
+   真正执行图像处理。
+6. `fallback(error, operation, context)`
+   执行失败时做降级、跳过或请求审核。
+
+这里建议再加一个重要约束：
+
+1. 工具包自己不直接去调用分割接口拿 mask
+2. 工具包只通过 `resolve_requirements()` 声明自己需要什么
+3. 真正去补 mask 的动作由 `Dispatcher` 或执行器完成
+
+这样做的好处是：
+
+1. 分割逻辑不会散落在每个包里
+2. 更容易统一审计和替换供应商
+3. 每个包更容易单元测试
+
+#### `PackageRegistry`
+
+建议不要只靠类继承，还要有统一注册表。
+
+注册表负责：
+
+1. 注册所有启用中的工具包。
+2. 按 `name` 查找工具包。
+3. 按 `domain`、`region`、`risk_level` 过滤工具包。
+4. 导出“给 LLM 看的能力清单”。
+
+当前阶段建议先采用显式注册，不做动态扫描：
+
+1. `registry.register(AdjustExposurePackage())`
+2. `registry.register(SubjectLightBalancePackage())`
+3. `registry.register(BackgroundToneBalancePackage())`
+
+这样更稳，也更方便调试和审计。
+
+当前阶段建议注册的首批工具包包括：
+
+1. `adjust_exposure`
+2. `adjust_highlights_shadows`
+3. `adjust_contrast`
+4. `adjust_white_balance`
+5. `adjust_vibrance_saturation`
+6. `crop_and_straighten`
+7. `denoise`
+8. `sharpen`
+
+这 8 个工具包组成当前第一批落地范围，优先目标是先把它们在 `whole_image` 模式下跑稳。
+
+第二批不是再新增一套“局部工具包”，而是为其中一部分已有工具包补充局部 `region` 支持，例如：
+
+1. `adjust_exposure` 支持 `person`、`main_subject`、`background`
+2. `adjust_contrast` 支持 `main_subject`、`background`
+3. `adjust_vibrance_saturation` 支持 `main_subject`、`background`
+4. `denoise`、`sharpen` 在局部模式下使用更保守参数
+
+#### 工具包如何绑定到 LLM
+
+当前阶段不建议把每个工具包都直接暴露成 `@tool` 给模型。
+
+更稳的方式是：
+
+1. `PackageRegistry` 统一导出工具包清单和 schema。
+2. `build_plan` 把这份能力清单提供给 LLM。
+3. LLM 只输出结构化 `edit_plan.operations`。
+4. 运行时根据 `op` 去注册表里找到对应工具包。
+5. 由执行器决定是否先补 mask，再调用工具包执行。
+
+也就是说：
+
+1. LLM 负责“选包”。
+2. 代码负责“执行包”。
+3. 监控和审计发生在代码执行层，而不是依赖 `@tool` 自动追踪。
+
+#### `OperationContext`
+
+建议所有工具包执行时都接收统一上下文，而不是每个函数自己散着接参。
+
+上下文里建议至少包含：
+
+1. 当前输入图路径
+2. `image_analysis`
+3. `retrieved_prefs`
+4. 已经拿到的 `masks`
+5. `thread_id`
+6. 执行过程中的审计对象
+
+建议后续把它设计成统一上下文对象，而不是让每个工具函数自己定义一套参数签名。
+
+#### `PackageResult`
+
+建议所有工具包返回统一结果结构，方便评估层和审计层消费。
+
+建议至少包含：
+
+1. `ok`
+2. `package`
+3. `output_image`
+4. `applied_params`
+5. `warnings`
+6. `artifacts`
+7. `fallback_used`
+8. `error`
+
+统一结果结构的意义在于：
+
+1. `evaluate_result` 不需要理解每个工具包的内部差异。
+2. 审计日志可以统一记录。
+3. 后续接 LangSmith 或自定义 trace 更容易。
+
+#### 当前阶段的最小落地建议
+
+如果按当前项目节奏推进，最推荐的落地顺序是：
+
+1. 先定义 `PackageSpec`
+2. 再定义 `EditOperation`
+3. 再定义 `OperationContext` 和 `PackageResult`
+4. 再实现 `ToolPackage` 抽象基类
+5. 再实现 `PackageRegistry`
+6. 最后先落一个最简单的包，例如 `adjust_exposure`
 
 ### 3.4 记忆层
 
@@ -253,7 +447,7 @@
 建议它长期稳定包含这些字段：
 
 1. `op`
-   工具包标识，例如 `adjust_exposure`、`subject_light_balance`。
+   工具包标识，例如 `adjust_exposure`、`adjust_vibrance_saturation`。
 2. `region`
    作用区域，例如 `whole_image`、`person`、`main_subject`、`background`。
 3. `strength`
@@ -527,17 +721,16 @@
 
 ### 6.1 确定性执行器先做什么
 
-建议第一版先做这些工具包：
+建议第一批先做这 8 个工具包：
 
-1. `global_exposure`
-2. `local_exposure`
-3. `contrast`
-4. `white_balance`
-5. `denoise`
-6. `sharpen`
-7. `crop`
-8. `background_tone_balance`
-9. `subject_light_balance`
+1. `adjust_exposure`
+2. `adjust_highlights_shadows`
+3. `adjust_contrast`
+4. `adjust_white_balance`
+5. `adjust_vibrance_saturation`
+6. `crop_and_straighten`
+7. `denoise`
+8. `sharpen`
 
 原因：
 
@@ -548,21 +741,28 @@
 建议对应模块：
 
 1. [app/tools/opencv_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/opencv_tools.py)
-2. [app/tools/pillow_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/pillow_tools.py)
-3. [app/tools/segmentation_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/segmentation_tools.py)
+2. [app/tools/image_ops.py](/Users/liuyan/Desktop/PsAgent/app/tools/image_ops.py)
+3. 参数归一化层
+4. 单元测试
 
 其中：
 
-1. `opencv_tools.py` 和 `pillow_tools.py` 负责真正的像素参数调整。
-2. `segmentation_tools.py` 负责统一封装阿里云分割调用，输出标准化 `mask` 或区域结果。
-3. 执行器子图只消费统一结果，不直接拼阿里云请求。
+1. `opencv_tools.py` 和 `image_ops.py` 负责真正的像素参数调整。
+2. 参数归一化层负责把抽象强度映射成稳定的内部参数。
+3. 单元测试负责验证参数可行性和结果可重复性。
 
 当前阶段更推荐的执行方式是：
 
 1. `build_plan` 先选择工具包
-2. 工具包声明自己是否需要 mask
-3. 执行器按需调用 `segmentation_tools.py`
-4. 最后再把结果交给 OpenCV/Pillow 具体函数
+2. 参数归一化层先把抽象参数变成可执行参数
+3. 执行器直接调 OpenCV/Pillow 具体函数
+4. 局部 `region` 的测试链路可以先接入 `segmentation_tools.py`
+5. 正式执行时，仍然保持“外层统一准备 mask，工具包只消费 mask”
+
+当前 `adjust_exposure` 的测试已经收敛成两段：
+
+1. 用 `tests/` 下的真人图片直接测 `whole_image` 曝光
+2. 联网调用阿里云 `SegmentHDBody + RefineMask` 实时生成二值人像 mask，再测 `person` 局部曝光
 
 ### 6.2 生成式执行器后做什么
 
@@ -600,6 +800,11 @@
 2. 而是某个工具包要求局部区域时，再请求阿里云分割结果。
 3. 再在分割区域上做本地确定性调整。
 4. 不做内容生成和内容替换。
+
+但按当前实施顺序：
+
+1. 第一批先只实现这 8 个工具包的 `whole_image` 模式，因此先不进入 `hybrid`
+2. 第二批当同一批工具包开始支持局部 `region` 时，再正式启用 `hybrid`
 
 ## 7. 记忆系统设计建议
 
@@ -869,8 +1074,8 @@
 
 第一版建议直接写规则：
 
-1. 全局类工具包走 `deterministic`
-2. 需要局部 mask 的工具包走 `hybrid`
+1. 第一批这 8 个工具包在 `whole_image` 模式下全部走 `deterministic`
+2. 第二批当同一批工具包请求 `person`、`main_subject`、`background` 等局部 `region` 时走 `hybrid`
 3. 当前阶段默认不把请求送去 `generative`
 
 完成标准：
@@ -889,14 +1094,13 @@
 建议先实现的操作：
 
 1. 曝光
-2. 对比度
-3. 白平衡
-4. 去噪
-5. 锐化
-6. 裁剪
-7. 脸部局部提亮
-8. 主体局部提亮
-9. 背景轻度压暗
+2. 高光阴影平衡
+3. 对比度
+4. 白平衡
+5. 自然饱和度 / 饱和度
+6. 裁剪与拉直
+7. 去噪
+8. 锐化
 
 为什么它优先：
 
@@ -907,7 +1111,7 @@
 实现时建议采用统一模式：
 
 1. 一个操作先映射到一个工具包
-2. 工具包决定自己是否需要 mask
+2. 参数归一化层先生成稳定内部参数
 3. 真正的工具函数只接收已经整理好的入参
 
 ### 第八步：实现 `evaluate_result`
@@ -1051,17 +1255,19 @@ docs/
 4. 再补 `parse_request`
 5. 再补 `build_plan`
 6. 再补工具包协议与注册表
-7. 再补 `route_executor`
-8. 再补 `segmentation_tools.py`
-9. 再补 `execute_deterministic`
-10. 再补 `execute_hybrid`
-11. 再补 `evaluate_result`
-12. 再补 `memory/retriever.py`
-13. 再补 `update_memory`
-14. 再补 `execute_generative`
-15. 再补 `human_review`
-16. 最后再接 API
+7. 再补参数归一化层
+8. 再补 `execute_deterministic`
+9. 再补第一批 8 个工具包的单元测试
+10. 再补 `evaluate_result`
+11. 再补 `memory/retriever.py`
+12. 再补 `update_memory`
+13. 再补 `route_executor`
+14. 再补 `segmentation_tools.py`
+15. 再补 `execute_hybrid`
+16. 再补 `execute_generative`
+17. 再补 `human_review`
+18. 最后再接 API
 
 一句话总结：
 
-先把 LangGraph 主图做成稳定的“理解 -> 规划 -> 选包 -> 按需分割 -> 执行 -> 评估 -> 记忆”骨架，再逐步把每个节点内部从占位实现替换成真实能力。
+先把 LangGraph 主图做成稳定的“理解 -> 规划 -> 选包 -> 参数归一化 -> 执行 -> 评估 -> 记忆”骨架，先跑通第一批 8 个工具包的 `whole_image` 模式，再为其中一部分增加局部 `region` 与分割能力。

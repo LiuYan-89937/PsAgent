@@ -18,7 +18,7 @@
 
 1. 先让 Graph 主链稳定，再追求模型效果。
 2. 先做显式修图，再做自动修图。
-3. 先做工具包协议，再做阿里云分割接入和确定性执行器。
+3. 先做工具包协议、参数归一化和确定性执行器，再做阿里云分割接入。
 4. 先做长期偏好的最小读写，再做复杂偏好召回。
 5. 先做规则判断，再做模型增强。
 6. 先做核心编排，再做 API。
@@ -234,7 +234,7 @@
 ### 你要做什么
 
 1. 读取 `edit_plan.executor`
-2. 判断每个工具包是否需要准备阿里云分割结果
+2. 第一批先按全局工具包处理，不要求准备阿里云分割结果
 3. 判断是否需要审核
 4. 把执行前的信息整理好
 
@@ -262,89 +262,153 @@
 
 1. 定义工具包的唯一标识。
 2. 定义每个工具包支持的区域类型。
-3. 定义每个工具包是否需要 mask。
+3. 定义每个工具包的 `mask_policy`。
 4. 定义每个工具包的输入 schema 和默认兜底参数。
+5. 定义工具包统一基类。
+6. 定义注册表和统一导出方式。
+7. 明确由 Dispatcher 统一补 mask，而不是包自己去拿。
 
-### 当前阶段建议先注册的工具包
+### 当前阶段建议先注册并优先落地的工具包
 
 1. `adjust_exposure`
-2. `adjust_white_balance`
+2. `adjust_highlights_shadows`
 3. `adjust_contrast`
+4. `adjust_white_balance`
+5. `adjust_vibrance_saturation`
+6. `crop_and_straighten`
+7. `denoise`
+8. `sharpen`
+
+这 8 个组成第一批工具包，优先目标是先跑通它们在 `whole_image` 模式下的参数增强链。
+
+第二批不是新增一套局部工具包，而是为其中一部分已有工具包增加局部 `region` 支持，例如：
+
+1. `adjust_exposure`
+2. `adjust_contrast`
+3. `adjust_vibrance_saturation`
 4. `denoise`
 5. `sharpen`
-6. `crop_and_straighten`
-7. `subject_light_balance`
-8. `background_tone_balance`
+
+### 这一阶段建议同时定下来的结构
+
+1. `PackageSpec`
+   纯声明对象，负责描述工具包能力。
+2. `ToolPackage`
+   统一基类，负责声明能力和生命周期方法。
+3. `PackageRegistry`
+   统一注册、发现、过滤和导出工具包。
+4. `OperationContext`
+   统一执行上下文。
+5. `PackageResult`
+   统一执行结果。
+
+### 基类建议至少包含的能力
+
+1. `name`
+2. `description`
+3. `supported_regions`
+4. `mask_policy`
+5. `supported_domains`
+6. `risk_level`
+7. `default_params`
+
+### 基类建议至少包含的方法
+
+1. `get_llm_schema()`
+2. `validate()`
+3. `resolve_requirements()`
+4. `normalize()`
+5. `execute()`
+6. `fallback()`
+
+### 关于 LLM 绑定方式
+
+这一阶段建议明确采用：
+
+1. 不把每个工具包直接暴露成 `@tool`
+2. 而是由注册表统一导出 schema 给 Planner
+3. 让 LLM 输出 `edit_plan.operations`
+4. 运行时再根据 `op` 查表执行
+
+### 这一阶段必须明确的执行边界
+
+1. 工具包负责声明自己需要什么
+2. Dispatcher 负责准备 mask、主体信息等前置依赖
+3. 工具包执行时只消费已经准备好的上下文
+4. 不允许每个工具包自己偷偷去请求阿里云分割
 
 ### 文件
 
 1. [app/graph/state.py](/Users/liuyan/Desktop/PsAgent/app/graph/state.py)
 2. [app/graph/nodes/build_plan.py](/Users/liuyan/Desktop/PsAgent/app/graph/nodes/build_plan.py)
 3. [app/graph/nodes/route_executor.py](/Users/liuyan/Desktop/PsAgent/app/graph/nodes/route_executor.py)
+4. [app/tools](/Users/liuyan/Desktop/PsAgent/app/tools)
 
 ### 完成标准
 
 1. Planner 能输出稳定的工具包级操作请求。
 2. 执行层能根据工具包声明判断是否需要 mask。
+3. 所有工具包都能通过统一注册表被发现。
+4. 工具包层已经有统一输入输出协议。
+5. 已经明确“声明层”和“执行层”的分工。
 
-## 11. 阶段 8：先做阿里云分割工具封装
+## 11. 阶段 8：先做参数归一化层
 
 ### 目标
 
-把区域能力抽成稳定工具层，不让 Graph 节点直接依赖供应商细节。
+先验证抽象强度是否能稳定映射成真实可执行参数。
 
 ### 你要做什么
 
-1. 在 `segmentation_tools.py` 中定义统一接口。
-2. 区分人像分割与主体分割两类调用。
-3. 统一输出 `mask`、`confidence`、`source` 等字段。
-4. 做最小错误处理和结果兜底。
+1. 定义 `strength` 的统一范围。
+2. 定义每个工具包的默认值和边界裁剪规则。
+3. 定义抽象参数到内部参数的映射。
+4. 确保同一输入下结果可重复。
 
-### 当前建议接入的阿里云能力
+### 当前阶段优先覆盖的工具包
 
-1. `SegmentHDBody`
-   用于人像主体分割。
-2. `SegmentCommonImage` 或 `SegmentHDCommonImage`
-   用于主视觉主体分割。
-
-### 文件
-
-[app/tools/segmentation_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/segmentation_tools.py)
+1. `adjust_exposure`
+2. `adjust_highlights_shadows`
+3. `adjust_contrast`
+4. `adjust_white_balance`
+5. `adjust_vibrance_saturation`
+6. `crop_and_straighten`
+7. `denoise`
+8. `sharpen`
 
 ### 完成标准
 
-1. 人像图可以拿到统一的人像分割结果。
-2. 主体图可以拿到统一的主体分割结果。
-3. 上层节点不需要知道阿里云具体 API 参数格式。
+1. 每个第一批工具包都有清晰的参数归一化规则。
+2. 参数越界时有稳定裁剪逻辑。
+3. 调参结果具备可解释性。
 
 ## 12. 阶段 9：先做确定性执行器
 
 ### 目标
 
-跑通最稳定、最常用的一条执行链。
+跑通第一批 8 个工具包在 `whole_image` 模式下的执行链。
 
 ### 你要做什么
 
 1. 在 `opencv_tools.py` 定义基础图像调节接口。
-2. 在 `pillow_tools.py` 定义基础图像调节接口。
+2. 在 `image_ops.py` 定义基础图像调节接口。
 3. 在执行器中把工具包请求映射到这些工具。
 
 ### 先做哪些操作
 
 1. 曝光
-2. 对比度
-3. 白平衡
-4. 去噪
-5. 锐化
-6. 裁剪
-7. 脸部局部提亮
-8. 主体局部提亮
-9. 背景轻度压暗
+2. 高光阴影平衡
+3. 对比度
+4. 白平衡
+5. 自然饱和度 / 饱和度
+6. 裁剪与拉直
+7. 去噪
+8. 锐化
 
 ### 文件
 
 1. [app/tools/opencv_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/opencv_tools.py)
-2. [app/tools/pillow_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/pillow_tools.py)
+2. [app/tools/image_ops.py](/Users/liuyan/Desktop/PsAgent/app/tools/image_ops.py)
 3. [app/graph/subgraphs/deterministic_edit.py](/Users/liuyan/Desktop/PsAgent/app/graph/subgraphs/deterministic_edit.py)
 
 ### 完成标准
@@ -352,7 +416,47 @@
 1. 显式修图最小闭环可以跑通。
 2. `candidate_outputs` 有统一格式。
 
-## 13. 阶段 10：实现结果评估节点
+## 13. 阶段 10：先补工具单元测试
+
+### 目标
+
+先验证这 8 个工具包在固定输入下是可控、可重复的。
+
+### 你要做什么
+
+1. 给每个工具包准备最小测试图夹具。
+2. 测参数归一化是否落在预期范围。
+3. 测输出是否成功生成。
+4. 测关键图像指标是否按预期变化。
+
+### 当前阶段建议重点测试
+
+1. 平均亮度变化
+2. 对比度变化
+3. 色温或色彩变化
+4. 输出尺寸是否保持正确
+5. 异常参数是否能被裁剪或兜底
+6. 需要局部区域时，用真实图片实时请求阿里云分割并验证 mask 内外差异
+
+### 当前测试前置条件
+
+1. 在 `tests/` 下放真实测试图片。
+2. 安装 `requirements.txt` 中的依赖。
+3. 配置阿里云环境变量：
+   `ALIBABA_CLOUD_ACCESS_KEY_ID`
+   `ALIBABA_CLOUD_ACCESS_KEY_SECRET`
+   可选：
+   `ALIBABA_CLOUD_REGION_ID`
+   `ALIYUN_IMAGESEG_ENDPOINT`
+
+### 完成标准
+
+1. 第一批 8 个工具包都有基础单元测试。
+2. 参数归一化和执行链可以联动验证。
+3. 工具层具备最小回归保障。
+4. `adjust_exposure` 已经具备“真实图片 + 阿里云实时 mask”测试链路。
+
+## 14. 阶段 11：实现结果评估节点
 
 ### 目标
 
@@ -382,7 +486,7 @@
 1. 系统能产出 `eval_report`。
 2. 审核分支可以被驱动。
 
-## 14. 阶段 11：实现长期记忆读取
+## 15. 阶段 12：实现长期记忆读取
 
 ### 目标
 
@@ -410,7 +514,7 @@
 
 1. `build_plan` 能拿到最小长期偏好输入。
 
-## 15. 阶段 12：实现长期记忆写入
+## 16. 阶段 13：实现长期记忆写入
 
 ### 目标
 
@@ -439,7 +543,56 @@
 
 1. 长期偏好能形成最小闭环。
 
-## 16. 阶段 13：实现生成式执行器
+## 17. 阶段 14：先做阿里云分割工具封装
+
+### 目标
+
+为第二批“同一批工具包的局部 `region` 模式”准备统一区域能力。
+
+### 你要做什么
+
+1. 在 `segmentation_tools.py` 中定义统一接口。
+2. 区分人像分割与主体分割两类调用。
+3. 统一输出 `mask`、`confidence`、`source` 等字段。
+4. 做最小错误处理和结果兜底。
+
+### 当前建议接入的阿里云能力
+
+1. `SegmentHDBody`
+   用于人像主体分割。
+2. `SegmentCommonImage` 或 `SegmentHDCommonImage`
+   用于主视觉主体分割。
+
+### 完成标准
+
+1. 人像图可以拿到统一的人像分割结果。
+2. 主体图可以拿到统一的主体分割结果。
+3. 上层节点不需要知道阿里云具体 API 参数格式。
+
+## 18. 阶段 15：实现 Hybrid 执行器
+
+### 目标
+
+支持同一批工具包在局部 `region` 模式下的“按需分割 -> 局部增强”链路。
+
+### 你要做什么
+
+1. 接入阿里云分割结果。
+2. 对需要 mask 的工具包先补区域。
+3. 再做局部确定性增强。
+4. 统一“区域 + 参数增强”的执行格式。
+
+### 文件
+
+1. [app/tools/segmentation_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/segmentation_tools.py)
+2. [app/graph/subgraphs/hybrid_edit.py](/Users/liuyan/Desktop/PsAgent/app/graph/subgraphs/hybrid_edit.py)
+
+### 完成标准
+
+1. 已有工具包在局部 `region` 模式下可以稳定执行。
+2. 输出格式与其他执行器一致。
+
+## 19. 阶段 16：实现生成式执行器
 
 ### 目标
 
@@ -469,30 +622,7 @@
 
 1. 至少一个高价值复杂场景跑通。
 
-## 17. 阶段 14：实现 Hybrid 执行器
-
-### 目标
-
-支持“先识别 / 再增强 / 再局部编辑”的真实业务链路。
-
-### 你要做什么
-
-1. 接入阿里云分割结果。
-2. 对需要 mask 的工具包先补区域。
-3. 再做局部确定性增强。
-4. 统一“区域 + 参数增强”的执行格式。
-
-### 文件
-
-1. [app/tools/segmentation_tools.py](/Users/liuyan/Desktop/PsAgent/app/tools/segmentation_tools.py)
-2. [app/graph/subgraphs/hybrid_edit.py](/Users/liuyan/Desktop/PsAgent/app/graph/subgraphs/hybrid_edit.py)
-
-### 完成标准
-
-1. 混合链路稳定。
-2. 输出格式与其他执行器一致。
-
-## 18. 阶段 15：实现自动修图模式
+## 20. 阶段 17：实现自动修图模式
 
 ### 目标
 
@@ -515,7 +645,7 @@
 1. 用户只传图时不报错。
 2. 系统能产出保守的 `edit_plan`。
 
-## 19. 阶段 16：实现人工审核
+## 21. 阶段 18：实现人工审核
 
 ### 目标
 
@@ -542,7 +672,7 @@
 1. 主图能暂停。
 2. 主图能恢复。
 
-## 20. 阶段 17：最后再接 API
+## 22. 阶段 19：最后再接 API
 
 ### 目标
 
@@ -559,7 +689,7 @@
 1. Graph 变化时不会牵连 API 层反复重构。
 2. 先把核心工作流做稳，API 接入会简单很多。
 
-## 21. 每个阶段都要保留的产物
+## 23. 每个阶段都要保留的产物
 
 建议每完成一个阶段，都留下下面几种产物：
 
@@ -570,7 +700,7 @@
 
 这样后面排查问题会轻松很多。
 
-## 22. 第一版范围控制建议
+## 24. 第一版范围控制建议
 
 为了避免项目过早失控，第一版建议明确不做：
 
