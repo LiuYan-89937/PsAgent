@@ -6,7 +6,22 @@ import tempfile
 from typing import Any
 
 from app.tools.image_ops import apply_highlights_shadows_adjustment
-from app.tools.packages.base import OperationContext, PackageResult, PackageSpec, ToolPackage
+from app.tools.packages.base import OperationContext, PackageParamsModel, PackageResult, PackageSpec, ToolPackage
+from pydantic import Field
+
+
+class AdjustHighlightsShadowsParams(PackageParamsModel):
+    """Planner-fillable params for highlights/shadows adjustment."""
+
+    strength: float = Field(..., ge=-1.0, le=1.0, description="主层次平衡强度")
+    tone_amount: float = Field(0.26, ge=0.05, le=0.9, description="整体层次调整量")
+    feather_radius: float = Field(18.0, ge=0.0, le=64.0, description="局部模式下的羽化半径")
+    midtone_contrast: float = Field(0.12, ge=0.0, le=0.5, description="中间调对比补偿")
+    local_radius: float = Field(36.0, ge=4.0, le=160.0, description="局部亮度估计半径")
+    shadow_tonal_width: float = Field(0.42, ge=0.1, le=0.8, description="阴影影响范围")
+    highlight_tonal_width: float = Field(0.38, ge=0.1, le=0.8, description="高光影响范围")
+    detail_amount: float = Field(0.32, ge=0.0, le=1.0, description="细节回灌强度")
+    highlight_balance: float = Field(0.6, ge=0.2, le=1.2, description="高光侧权重")
 
 
 class AdjustHighlightsShadowsPackage(ToolPackage):
@@ -16,7 +31,7 @@ class AdjustHighlightsShadowsPackage(ToolPackage):
     spec = PackageSpec(
         name="adjust_highlights_shadows",
         description="Balance highlights and shadows globally or by region.",
-        supported_regions=["whole_image", "person", "main_subject", "background"],
+        supported_regions=["whole_image", "masked_region"],
         mask_policy="optional",
         supported_domains=["portrait", "landscape", "general"],
         risk_level="low",
@@ -31,27 +46,15 @@ class AdjustHighlightsShadowsPackage(ToolPackage):
             "highlight_balance": 0.6,
         },
     )
-
-    def get_llm_schema(self) -> dict[str, Any]:
-        # 只导出选择包所需的信息。
-        return {
-            "name": self.spec.name,
-            "description": self.spec.description,
-            "supported_regions": self.spec.supported_regions,
-            "mask_policy": self.spec.mask_policy,
-        }
+    params_model = AdjustHighlightsShadowsParams
 
     def validate(self, operation: dict[str, Any], context: OperationContext) -> None:
         # 先做最基础的边界校验，保证最小实现可控。
         region = operation.get("region") or "whole_image"
-        strength = operation.get("strength", 0.0)
+        self.parse_params(operation)
 
-        if region not in self.spec.supported_regions:
+        if not self.supports_operation(operation, context):
             raise ValueError(f"Unsupported region for {self.name}: {region}")
-        if not isinstance(strength, (int, float)):
-            raise TypeError("strength must be numeric")
-        if not -1.0 <= float(strength) <= 1.0:
-            raise ValueError("strength must be between -1.0 and 1.0")
         if not context.image_path:
             raise ValueError("image_path is required for highlights/shadows adjustment")
 
@@ -62,9 +65,10 @@ class AdjustHighlightsShadowsPackage(ToolPackage):
     ) -> dict[str, Any]:
         # 当前先按 region 是否为 whole_image 来判断要不要 mask。
         region = operation.get("region") or "whole_image"
+        requires_mask = self.operation_requires_mask(operation, context)
         return {
-            "requires_mask": region != "whole_image",
-            "required_region": None if region == "whole_image" else region,
+            "requires_mask": requires_mask,
+            "required_region": region if requires_mask else None,
         }
 
     def normalize(
@@ -74,35 +78,19 @@ class AdjustHighlightsShadowsPackage(ToolPackage):
     ) -> dict[str, Any]:
         # 专业版里除了基本强度，还要把局部估计半径、作用 tonal width、
         # 细节回灌量等一起纳入内部参数，才能更接近真实修图软件的手感。
-        raw_strength = float(operation.get("strength", 0.0))
-        clipped_strength = max(-1.0, min(1.0, raw_strength))
-        params = dict(self.spec.default_params)
-        params.update(operation.get("params", {}))
-
-        tone_amount = float(params.get("tone_amount", self.spec.default_params["tone_amount"]))
-        tone_amount = max(0.05, min(0.9, tone_amount))
-        feather_radius = float(params.get("feather_radius", self.spec.default_params["feather_radius"]))
-        feather_radius = max(0.0, min(64.0, feather_radius))
-        midtone_contrast = float(
-            params.get("midtone_contrast", self.spec.default_params["midtone_contrast"])
-        )
-        midtone_contrast = max(0.0, min(0.5, midtone_contrast))
-        local_radius = float(params.get("local_radius", self.spec.default_params["local_radius"]))
-        local_radius = max(4.0, min(160.0, local_radius))
-        shadow_tonal_width = float(
-            params.get("shadow_tonal_width", self.spec.default_params["shadow_tonal_width"])
-        )
-        shadow_tonal_width = max(0.1, min(0.8, shadow_tonal_width))
-        highlight_tonal_width = float(
-            params.get("highlight_tonal_width", self.spec.default_params["highlight_tonal_width"])
-        )
-        highlight_tonal_width = max(0.1, min(0.8, highlight_tonal_width))
-        detail_amount = float(params.get("detail_amount", self.spec.default_params["detail_amount"]))
-        detail_amount = max(0.0, min(1.0, detail_amount))
-        highlight_balance = float(
-            params.get("highlight_balance", self.spec.default_params["highlight_balance"])
-        )
-        highlight_balance = max(0.2, min(1.2, highlight_balance))
+        parsed = self.parse_params(operation)
+        if not isinstance(parsed, AdjustHighlightsShadowsParams):
+            raise ValueError("Highlights/shadows params model is not configured.")
+        clipped_strength = parsed.strength
+        params = parsed.model_dump()
+        tone_amount = parsed.tone_amount
+        feather_radius = parsed.feather_radius
+        midtone_contrast = parsed.midtone_contrast
+        local_radius = parsed.local_radius
+        shadow_tonal_width = parsed.shadow_tonal_width
+        highlight_tonal_width = parsed.highlight_tonal_width
+        detail_amount = parsed.detail_amount
+        highlight_balance = parsed.highlight_balance
 
         shadow_amount = clipped_strength * tone_amount
         highlight_amount = clipped_strength * tone_amount * highlight_balance

@@ -7,6 +7,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+.venv/
+.venv*/
+venv/
+env/
 
 # Local test artifacts
 tests/output/
@@ -17,6 +21,7 @@ tests/*.webp
 tests/*.heic
 tests/*.tif
 tests/*.tiff
+data/assets/
 
 # Local environment / secrets
 .env
@@ -27,3 +32,14 @@ secrets/
 *.secrets
 aliyun.env
 aliyun.local.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Local docs
+doc/
+docs/

@@ -61,7 +61,7 @@ class PackageRegistry:
                 package
                 for package in packages
                 if not package.spec.supported_regions
-                or region in package.spec.supported_regions
+                or package.supports_region(region)
             ]
         if risk_level is not None:
             packages = [

@@ -14,7 +14,7 @@ from app.tools.segmentation_tools import (
     ALIYUN_ACCESS_KEY_ID_ENV,
     ALIYUN_ACCESS_KEY_SECRET_ENV,
     AliyunImageSegError,
-    generate_realtime_person_mask,
+    generate_realtime_subject_mask,
 )
 
 
@@ -87,7 +87,7 @@ class AdjustExposurePackageTest(unittest.TestCase):
 
                 self.assertGreater(output_mean, original_mean)
 
-    def test_execute_returns_fallback_result_when_mask_missing(self) -> None:
+    def test_execute_runs_globally_when_mask_missing(self) -> None:
         for image_path in REAL_IMAGE_PATHS:
             with self.subTest(image=image_path.name):
                 result = self.package.execute(
@@ -95,16 +95,15 @@ class AdjustExposurePackageTest(unittest.TestCase):
                     OperationContext(image_path=str(image_path)),
                 )
 
-                self.assertFalse(result.ok)
-                self.assertTrue(result.fallback_used)
-                self.assertIsNotNone(result.error)
+                self.assertTrue(result.ok)
+                self.assertFalse(result.fallback_used)
 
-    def test_generate_realtime_person_mask_with_aliyun(self) -> None:
+    def test_generate_realtime_subject_mask_with_aliyun(self) -> None:
         self._require_live_aliyun_setup()
 
         for image_path in REAL_IMAGE_PATHS:
             with self.subTest(image=image_path.name):
-                segmentation = generate_realtime_person_mask(
+                segmentation = generate_realtime_subject_mask(
                     str(image_path),
                     output_dir=str(Path(self.tmpdir.name) / image_path.stem),
                 )
@@ -127,7 +126,7 @@ class AdjustExposurePackageTest(unittest.TestCase):
         for image_path in REAL_IMAGE_PATHS:
             with self.subTest(image=image_path.name):
                 try:
-                    segmentation = generate_realtime_person_mask(
+                    segmentation = generate_realtime_subject_mask(
                         str(image_path),
                         output_dir=str(Path(self.tmpdir.name) / image_path.stem),
                     )

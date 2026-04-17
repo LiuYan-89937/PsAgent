@@ -6,7 +6,24 @@ import tempfile
 from typing import Any
 
 from app.tools.image_ops import apply_vibrance_saturation_adjustment
-from app.tools.packages.base import OperationContext, PackageResult, PackageSpec, ToolPackage
+from app.tools.packages.base import OperationContext, PackageParamsModel, PackageResult, PackageSpec, ToolPackage
+from pydantic import Field
+
+
+class AdjustVibranceSaturationParams(PackageParamsModel):
+    """Planner-fillable params for vibrance/saturation adjustment."""
+
+    strength: float = Field(..., ge=-1.0, le=1.0, description="主色彩增强强度")
+    vibrance_scale: float = Field(0.52, ge=0.1, le=1.5, description="vibrance 映射倍率")
+    saturation_scale: float = Field(0.14, ge=0.0, le=1.0, description="saturation 映射倍率")
+    feather_radius: float = Field(18.0, ge=0.0, le=64.0, description="局部模式下的羽化半径")
+    protect_highlights: float = Field(0.26, ge=0.0, le=0.8, description="高光保护")
+    protect_skin: float = Field(0.34, ge=0.0, le=0.8, description="肤色保护")
+    protect_shadows: float = Field(0.24, ge=0.0, le=0.8, description="暗部保护")
+    chroma_denoise: float = Field(0.34, ge=0.0, le=1.0, description="色度平滑强度")
+    max_chroma: float = Field(92.0, ge=48.0, le=128.0, description="色度软上限")
+    neutral_floor: float = Field(6.0, ge=0.0, le=24.0, description="中性色保护起点")
+    neutral_softness: float = Field(14.0, ge=2.0, le=32.0, description="中性色保护过渡宽度")
 
 
 class AdjustVibranceSaturationPackage(ToolPackage):
@@ -16,7 +33,7 @@ class AdjustVibranceSaturationPackage(ToolPackage):
     spec = PackageSpec(
         name="adjust_vibrance_saturation",
         description="Adjust vibrance or saturation globally or by region.",
-        supported_regions=["whole_image", "person", "main_subject", "background"],
+        supported_regions=["whole_image", "masked_region"],
         mask_policy="optional",
         supported_domains=["portrait", "landscape", "general"],
         risk_level="low",
@@ -33,27 +50,15 @@ class AdjustVibranceSaturationPackage(ToolPackage):
             "neutral_softness": 14.0,
         },
     )
-
-    def get_llm_schema(self) -> dict[str, Any]:
-        # planner 只需要知道这个包的选择边界。
-        return {
-            "name": self.spec.name,
-            "description": self.spec.description,
-            "supported_regions": self.spec.supported_regions,
-            "mask_policy": self.spec.mask_policy,
-        }
+    params_model = AdjustVibranceSaturationParams
 
     def validate(self, operation: dict[str, Any], context: OperationContext) -> None:
         # 色彩类操作也先做最基础的边界校验。
         region = operation.get("region") or "whole_image"
-        strength = operation.get("strength", 0.0)
+        self.parse_params(operation)
 
-        if region not in self.spec.supported_regions:
+        if not self.supports_operation(operation, context):
             raise ValueError(f"Unsupported region for {self.name}: {region}")
-        if not isinstance(strength, (int, float)):
-            raise TypeError("strength must be numeric")
-        if not -1.0 <= float(strength) <= 1.0:
-            raise ValueError("strength must be between -1.0 and 1.0")
         if not context.image_path:
             raise ValueError("image_path is required for vibrance/saturation adjustment")
 
@@ -64,9 +69,10 @@ class AdjustVibranceSaturationPackage(ToolPackage):
     ) -> dict[str, Any]:
         # region 不是 whole_image 时，后续由 dispatcher 准备 mask。
         region = operation.get("region") or "whole_image"
+        requires_mask = self.operation_requires_mask(operation, context)
         return {
-            "requires_mask": region != "whole_image",
-            "required_region": None if region == "whole_image" else region,
+            "requires_mask": requires_mask,
+            "required_region": region if requires_mask else None,
         }
 
     def normalize(
@@ -76,39 +82,21 @@ class AdjustVibranceSaturationPackage(ToolPackage):
     ) -> dict[str, Any]:
         # 默认优先走 vibrance，让低饱和区域先起来；
         # saturation 只做保守补充，避免整体颜色冲得太猛。
-        raw_strength = float(operation.get("strength", 0.0))
-        clipped_strength = max(-1.0, min(1.0, raw_strength))
-        params = dict(self.spec.default_params)
-        params.update(operation.get("params", {}))
-
-        vibrance_scale = float(params.get("vibrance_scale", self.spec.default_params["vibrance_scale"]))
-        vibrance_scale = max(0.1, min(1.5, vibrance_scale))
-        saturation_scale = float(
-            params.get("saturation_scale", self.spec.default_params["saturation_scale"])
-        )
-        saturation_scale = max(0.0, min(1.0, saturation_scale))
-        feather_radius = float(params.get("feather_radius", self.spec.default_params["feather_radius"]))
-        feather_radius = max(0.0, min(64.0, feather_radius))
-        protect_highlights = float(
-            params.get("protect_highlights", self.spec.default_params["protect_highlights"])
-        )
-        protect_highlights = max(0.0, min(0.8, protect_highlights))
-        protect_skin = float(params.get("protect_skin", self.spec.default_params["protect_skin"]))
-        protect_skin = max(0.0, min(0.8, protect_skin))
-        protect_shadows = float(
-            params.get("protect_shadows", self.spec.default_params["protect_shadows"])
-        )
-        protect_shadows = max(0.0, min(0.8, protect_shadows))
-        chroma_denoise = float(params.get("chroma_denoise", self.spec.default_params["chroma_denoise"]))
-        chroma_denoise = max(0.0, min(1.0, chroma_denoise))
-        max_chroma = float(params.get("max_chroma", self.spec.default_params["max_chroma"]))
-        max_chroma = max(48.0, min(128.0, max_chroma))
-        neutral_floor = float(params.get("neutral_floor", self.spec.default_params["neutral_floor"]))
-        neutral_floor = max(0.0, min(24.0, neutral_floor))
-        neutral_softness = float(
-            params.get("neutral_softness", self.spec.default_params["neutral_softness"])
-        )
-        neutral_softness = max(2.0, min(32.0, neutral_softness))
+        parsed = self.parse_params(operation)
+        if not isinstance(parsed, AdjustVibranceSaturationParams):
+            raise ValueError("Vibrance/saturation params model is not configured.")
+        clipped_strength = parsed.strength
+        params = parsed.model_dump()
+        vibrance_scale = parsed.vibrance_scale
+        saturation_scale = parsed.saturation_scale
+        feather_radius = parsed.feather_radius
+        protect_highlights = parsed.protect_highlights
+        protect_skin = parsed.protect_skin
+        protect_shadows = parsed.protect_shadows
+        chroma_denoise = parsed.chroma_denoise
+        max_chroma = parsed.max_chroma
+        neutral_floor = parsed.neutral_floor
+        neutral_softness = parsed.neutral_softness
 
         vibrance_amount = clipped_strength * vibrance_scale
         saturation_amount = clipped_strength * saturation_scale

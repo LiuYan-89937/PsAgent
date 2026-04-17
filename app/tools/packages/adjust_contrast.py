@@ -6,7 +6,19 @@ import tempfile
 from typing import Any
 
 from app.tools.image_ops import apply_contrast_adjustment
-from app.tools.packages.base import OperationContext, PackageResult, PackageSpec, ToolPackage
+from app.tools.packages.base import OperationContext, PackageParamsModel, PackageResult, PackageSpec, ToolPackage
+from pydantic import Field
+
+
+class AdjustContrastParams(PackageParamsModel):
+    """Planner-fillable params for contrast adjustment."""
+
+    strength: float = Field(..., ge=-1.0, le=1.0, description="主对比度强度，正值增强，负值减弱")
+    contrast_scale: float = Field(0.7, ge=0.1, le=1.5, description="主对比度映射倍率")
+    feather_radius: float = Field(18.0, ge=0.0, le=64.0, description="局部模式下的羽化半径")
+    pivot: float = Field(0.5, ge=0.25, le=0.75, description="中灰锚点")
+    protect_highlights: float = Field(0.22, ge=0.0, le=0.8, description="高光保护强度")
+    protect_shadows: float = Field(0.22, ge=0.0, le=0.8, description="阴影保护强度")
 
 
 class AdjustContrastPackage(ToolPackage):
@@ -16,7 +28,7 @@ class AdjustContrastPackage(ToolPackage):
     spec = PackageSpec(
         name="adjust_contrast",
         description="Adjust contrast globally or for selected regions.",
-        supported_regions=["whole_image", "person", "main_subject", "background"],
+        supported_regions=["whole_image", "masked_region"],
         mask_policy="optional",
         supported_domains=["portrait", "landscape", "general"],
         risk_level="low",
@@ -28,27 +40,15 @@ class AdjustContrastPackage(ToolPackage):
             "protect_shadows": 0.22,
         },
     )
-
-    def get_llm_schema(self) -> dict[str, Any]:
-        # planner 只看能力声明，不看执行细节。
-        return {
-            "name": self.spec.name,
-            "description": self.spec.description,
-            "supported_regions": self.spec.supported_regions,
-            "mask_policy": self.spec.mask_policy,
-        }
+    params_model = AdjustContrastParams
 
     def validate(self, operation: dict[str, Any], context: OperationContext) -> None:
         # 对比度和曝光一样，需要先做最基础的边界限制。
         region = operation.get("region") or "whole_image"
-        strength = operation.get("strength", 0.0)
+        self.parse_params(operation)
 
-        if region not in self.spec.supported_regions:
+        if not self.supports_operation(operation, context):
             raise ValueError(f"Unsupported region for {self.name}: {region}")
-        if not isinstance(strength, (int, float)):
-            raise TypeError("strength must be numeric")
-        if not -1.0 <= float(strength) <= 1.0:
-            raise ValueError("strength must be between -1.0 and 1.0")
         if not context.image_path:
             raise ValueError("image_path is required for contrast adjustment")
 
@@ -59,9 +59,10 @@ class AdjustContrastPackage(ToolPackage):
     ) -> dict[str, Any]:
         # dispatcher 会根据这里的声明去准备前置依赖。
         region = operation.get("region") or "whole_image"
+        requires_mask = self.operation_requires_mask(operation, context)
         return {
-            "requires_mask": region != "whole_image",
-            "required_region": None if region == "whole_image" else region,
+            "requires_mask": requires_mask,
+            "required_region": region if requires_mask else None,
         }
 
     def normalize(
@@ -70,26 +71,17 @@ class AdjustContrastPackage(ToolPackage):
         context: OperationContext,
     ) -> dict[str, Any]:
         # 最小实现里把一个抽象 strength 映射成围绕中灰点的对比度伸缩量。
-        raw_strength = float(operation.get("strength", 0.0))
-        clipped_strength = max(-1.0, min(1.0, raw_strength))
-        params = dict(self.spec.default_params)
-        params.update(operation.get("params", {}))
+        parsed = self.parse_params(operation)
+        if not isinstance(parsed, AdjustContrastParams):
+            raise ValueError("Contrast params model is not configured.")
 
-        contrast_scale = float(params.get("contrast_scale", self.spec.default_params["contrast_scale"]))
-        contrast_scale = max(0.1, min(1.5, contrast_scale))
-        feather_radius = float(params.get("feather_radius", self.spec.default_params["feather_radius"]))
-        feather_radius = max(0.0, min(64.0, feather_radius))
-        pivot = float(params.get("pivot", self.spec.default_params["pivot"]))
-        pivot = max(0.25, min(0.75, pivot))
-        protect_highlights = float(
-            params.get("protect_highlights", self.spec.default_params["protect_highlights"])
-        )
-        protect_highlights = max(0.0, min(0.8, protect_highlights))
-        protect_shadows = float(
-            params.get("protect_shadows", self.spec.default_params["protect_shadows"])
-        )
-        protect_shadows = max(0.0, min(0.8, protect_shadows))
-
+        clipped_strength = parsed.strength
+        params = parsed.model_dump()
+        contrast_scale = parsed.contrast_scale
+        feather_radius = parsed.feather_radius
+        pivot = parsed.pivot
+        protect_highlights = parsed.protect_highlights
+        protect_shadows = parsed.protect_shadows
         contrast_amount = clipped_strength * contrast_scale
         return {
             "region": operation.get("region") or "whole_image",

@@ -97,7 +97,7 @@ class AdjustContrastPackageTest(unittest.TestCase):
         self.assertNotEqual(output.getpixel((1, 4)), 150)
         self.assertEqual(output.getpixel((6, 4)), 120)
 
-    def test_execute_returns_fallback_result_when_mask_missing(self) -> None:
+    def test_execute_runs_globally_when_mask_missing(self) -> None:
         result = self.package.execute(
             {
                 "op": "adjust_contrast",
@@ -108,9 +108,8 @@ class AdjustContrastPackageTest(unittest.TestCase):
             OperationContext(image_path=self.masked_image_path),
         )
 
-        self.assertFalse(result.ok)
-        self.assertTrue(result.fallback_used)
-        self.assertIsNotNone(result.error)
+        self.assertTrue(result.ok)
+        self.assertFalse(result.fallback_used)
 
 
 if __name__ == "__main__":

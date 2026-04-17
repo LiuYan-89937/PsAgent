@@ -51,7 +51,7 @@ class AdjustWhiteBalancePackageTest(unittest.TestCase):
 
     def test_normalize_maps_strength_to_temperature_shift(self) -> None:
         normalized = self.package.normalize(
-            {"op": "adjust_white_balance", "strength": 0.5, "params": {"tint_bias": 0.25}},
+            {"op": "adjust_white_balance", "strength": 0.5, "params": {"tint": 0.25}},
             OperationContext(image_path=self.cool_image_path),
         )
 
@@ -99,7 +99,7 @@ class AdjustWhiteBalancePackageTest(unittest.TestCase):
         self.assertNotEqual(output.getpixel((1, 4)), (118, 132, 154))
         self.assertEqual(output.getpixel((6, 4)), (128, 128, 128))
 
-    def test_execute_returns_fallback_result_when_mask_missing(self) -> None:
+    def test_execute_runs_globally_when_mask_missing(self) -> None:
         result = self.package.execute(
             {
                 "op": "adjust_white_balance",
@@ -110,9 +110,8 @@ class AdjustWhiteBalancePackageTest(unittest.TestCase):
             OperationContext(image_path=self.masked_image_path),
         )
 
-        self.assertFalse(result.ok)
-        self.assertTrue(result.fallback_used)
-        self.assertIsNotNone(result.error)
+        self.assertTrue(result.ok)
+        self.assertFalse(result.fallback_used)
 
 
 if __name__ == "__main__":
