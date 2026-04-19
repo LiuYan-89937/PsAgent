@@ -33,6 +33,118 @@ MASK_PARAM_TO_RUNTIME_KEY = {
 MASK_PARAM_KEYS = frozenset(MASK_PARAM_TO_RUNTIME_KEY)
 
 
+def _schema_non_null_variants(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return non-null schema variants for a property."""
+
+    variants = spec.get("anyOf") if isinstance(spec.get("anyOf"), list) else [spec]
+    non_null = [
+        item
+        for item in variants
+        if isinstance(item, dict) and item.get("type") != "null"
+    ]
+    return non_null or [spec]
+
+
+def _schema_bound(spec: dict[str, Any], key: str) -> Any:
+    """Read the first bound-like key from non-null variants."""
+
+    for variant in _schema_non_null_variants(spec):
+        if key in variant:
+            return variant[key]
+    return spec.get(key)
+
+
+def _format_schema_value(value: Any) -> str:
+    """Format schema numeric values compactly for human/model descriptions."""
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _schema_range_hint(spec: dict[str, Any]) -> str | None:
+    """Build a concise range hint from JSON schema bounds."""
+
+    type_names = {
+        variant.get("type")
+        for variant in _schema_non_null_variants(spec)
+        if isinstance(variant, dict) and isinstance(variant.get("type"), str)
+    }
+    if not type_names:
+        type_names = {spec.get("type")} if isinstance(spec.get("type"), str) else set()
+
+    minimum = _schema_bound(spec, "minimum")
+    maximum = _schema_bound(spec, "maximum")
+    exclusive_minimum = _schema_bound(spec, "exclusiveMinimum")
+    exclusive_maximum = _schema_bound(spec, "exclusiveMaximum")
+    min_length = _schema_bound(spec, "minLength")
+    max_length = _schema_bound(spec, "maxLength")
+
+    if {"number", "integer"} & type_names:
+        if minimum is not None and maximum is not None:
+            return f"范围 {_format_schema_value(minimum)}~{_format_schema_value(maximum)}"
+        if exclusive_minimum is not None and exclusive_maximum is not None:
+            return f"范围 ({_format_schema_value(exclusive_minimum)},{_format_schema_value(exclusive_maximum)})"
+        if minimum is not None:
+            return f">= {_format_schema_value(minimum)}"
+        if maximum is not None:
+            return f"<= {_format_schema_value(maximum)}"
+        if exclusive_minimum is not None:
+            return f"> {_format_schema_value(exclusive_minimum)}"
+        if exclusive_maximum is not None:
+            return f"< {_format_schema_value(exclusive_maximum)}"
+
+    if "string" in type_names:
+        if min_length is not None and max_length is not None:
+            return f"长度 {min_length}~{max_length}"
+        if min_length is not None:
+            return f"长度 >= {min_length}"
+        if max_length is not None:
+            return f"长度 <= {max_length}"
+
+    return None
+
+
+def _compact_schema_description(description: str | None, spec: dict[str, Any]) -> str | None:
+    """Normalize a property description into a shorter planner-facing form."""
+
+    text = " ".join(str(description or "").strip().split())
+    if not text:
+        return None
+
+    replacements = (
+        ("局部模式下的", "局部"),
+        ("用于", ""),
+        ("适合", ""),
+        ("控制", ""),
+        ("整体", ""),
+        ("区域", ""),
+        ("的力度", ""),
+        ("的强度", "强度"),
+        ("的偏移", "偏移"),
+        ("的调整", "调整"),
+        ("的增减", "增减"),
+    )
+    for source, target in replacements:
+        text = text.replace(source, target)
+
+    while "  " in text:
+        text = text.replace("  ", " ")
+    text = text.strip(" ;；。")
+
+    range_hint = _schema_range_hint(spec)
+    if range_hint and range_hint not in text:
+        text = f"{text}；{range_hint}"
+
+    return text
+
+
 class MaskParams(BaseModel):
     """Validated optional mask-generation params shared by local edit packages."""
 
@@ -299,6 +411,18 @@ class ToolPackage(ABC):
             schema["properties"].update(mask_schema.get("properties", {}))
             if "title" in mask_schema and "title" not in schema:
                 schema["title"] = mask_schema["title"]
+
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for property_name, property_spec in properties.items():
+                if not isinstance(property_spec, dict):
+                    continue
+                compact_description = _compact_schema_description(
+                    property_spec.get("description"),
+                    property_spec,
+                )
+                if compact_description:
+                    property_spec["description"] = compact_description
         schema["additionalProperties"] = False
         return schema
 

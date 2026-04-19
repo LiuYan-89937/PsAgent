@@ -6,10 +6,10 @@ import unittest
 from unittest.mock import patch
 
 from app.graph.nodes.parse_request import parse_request
-from app.graph.nodes.route_executor import route_executor
 from app.graph.state import EditOperation, RequestPackageHint
 from app.tools import PACKAGE_STATUS_LABELS
 from app.tools.packages import build_default_package_registry
+from app.tools.packages.macros import operations_require_hybrid
 
 
 class ExtendedRegistryAndRoutingTest(unittest.TestCase):
@@ -45,25 +45,18 @@ class ExtendedRegistryAndRoutingTest(unittest.TestCase):
         self.assertIn("blemish_remove", requested_ops)
         self.assertIn("portrait_natural_whitening", requested_ops)
 
-    def test_route_executor_switches_to_hybrid_for_macro_with_masked_substeps(self) -> None:
-        result = route_executor(
-            {
-                "edit_plan": {
-                    "mode": "explicit",
-                    "domain": "portrait",
-                    "preserve": [],
-                    "operations": [
-                        {
-                            "op": "portrait_retouch",
-                            "region": "whole_image",
-                            "params": {"strength": 0.4},
-                        }
-                    ],
-                }
-            }
+    def test_macro_with_masked_substeps_requires_hybrid_execution(self) -> None:
+        self.assertTrue(
+            operations_require_hybrid(
+                [
+                    {
+                        "op": "portrait_retouch",
+                        "region": "whole_image",
+                        "params": {"strength": 0.4},
+                    }
+                ]
+            )
         )
-
-        self.assertEqual(result["edit_plan"]["executor"], "hybrid")
 
     def test_runtime_labels_cover_new_tools(self) -> None:
         self.assertEqual(PACKAGE_STATUS_LABELS["remove_heal"], "正在智能修复")

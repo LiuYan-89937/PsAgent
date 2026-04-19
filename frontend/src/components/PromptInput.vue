@@ -8,6 +8,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'submit', instruction: string): void
+  (e: 'auto-beautify'): void
   (e: 'cancel'): void
 }>()
 
@@ -50,17 +51,22 @@ function handleSubmit() {
       ></textarea>
       <div class="action-bar">
         <span class="hint">按 Enter 键快速提交指令</span>
-        <button 
-          class="btn-primary" 
-          :disabled="!instruction.trim()" 
-          @click="handleSubmit"
-        >
-          开始处理
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:8px;">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
-        </button>
+        <div class="action-buttons">
+          <button class="btn-secondary" @click="$emit('auto-beautify')">
+            智能美化
+          </button>
+          <button 
+            class="btn-primary" 
+            :disabled="!instruction.trim()" 
+            @click="handleSubmit"
+          >
+            开始处理
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:8px;">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -146,10 +152,17 @@ function handleSubmit() {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
 }
 
 .hint {
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 </style>

@@ -28,103 +28,103 @@ from app.tools.packages.extended_base import DeterministicImageOpPackage
 
 
 class LensCorrectionParams(PackageParamsModel):
-    strength: float = Field(0.4, ge=-1.0, le=1.0)
-    edge_scale: float = Field(1.0, ge=1.0, le=1.2)
+    strength: float = Field(0.4, ge=-1.0, le=1.0, description="畸变校正强度。")
+    edge_scale: float = Field(1.0, ge=1.0, le=1.2, description="边缘缩放补偿。")
 
 
 class ChromaticAberrationParams(PackageParamsModel):
-    strength: float = Field(0.35, ge=0.0, le=1.0)
-    radial_bias: float = Field(0.35, ge=0.0, le=1.0)
+    strength: float = Field(0.35, ge=0.0, le=1.0, description="色差校正强度。")
+    radial_bias: float = Field(0.35, ge=0.0, le=1.0, description="边缘优先度。")
 
 
 class DefringeParams(PackageParamsModel):
-    strength: float = Field(0.35, ge=0.0, le=1.0)
-    purple_amount: float = Field(0.6, ge=0.0, le=1.0)
-    green_amount: float = Field(0.35, ge=0.0, le=1.0)
-    edge_threshold: float = Field(0.06, ge=0.0, le=0.6)
+    strength: float = Field(0.35, ge=0.0, le=1.0, description="去边色主强度。")
+    purple_amount: float = Field(0.6, ge=0.0, le=1.0, description="紫边抑制。")
+    green_amount: float = Field(0.35, ge=0.0, le=1.0, description="绿边抑制。")
+    edge_threshold: float = Field(0.06, ge=0.0, le=0.6, description="边缘阈值。")
 
 
 class PerspectiveParams(PackageParamsModel):
-    vertical_amount: float = Field(0.0, ge=-1.0, le=1.0)
-    horizontal_amount: float = Field(0.0, ge=-1.0, le=1.0)
-    strength: float = Field(0.4, ge=0.0, le=1.0)
+    vertical_amount: float = Field(0.0, ge=-1.0, le=1.0, description="垂直透视偏移。")
+    horizontal_amount: float = Field(0.0, ge=-1.0, le=1.0, description="水平透视偏移。")
+    strength: float = Field(0.4, ge=0.0, le=1.0, description="透视校正总强度。")
 
 
 class AutoUprightParams(PackageParamsModel):
-    strength: float = Field(0.7, ge=0.0, le=1.0)
-    max_angle: float = Field(8.0, ge=0.0, le=20.0)
+    strength: float = Field(0.7, ge=0.0, le=1.0, description="自动扶正强度。")
+    max_angle: float = Field(8.0, ge=0.0, le=20.0, description="最大旋转角度。")
 
 
 class VignetteParams(PackageParamsModel):
-    amount: float = Field(0.25, ge=-1.0, le=1.0)
-    midpoint: float = Field(0.62, ge=0.15, le=0.95)
-    roundness: float = Field(0.0, ge=-1.0, le=1.0)
-    feather: float = Field(0.65, ge=0.05, le=1.0)
-    feather_radius: float = Field(20.0, ge=0.0, le=64.0)
+    amount: float = Field(0.25, ge=-1.0, le=1.0, description="暗角强度。")
+    midpoint: float = Field(0.62, ge=0.15, le=0.95, description="暗角起点。")
+    roundness: float = Field(0.0, ge=-1.0, le=1.0, description="暗角圆润度。")
+    feather: float = Field(0.65, ge=0.05, le=1.0, description="暗角过渡柔和度。")
+    feather_radius: float = Field(20.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class GrainParams(PackageParamsModel):
-    amount: float = Field(0.2, ge=0.0, le=1.0)
-    size: float = Field(0.9, ge=0.2, le=2.0)
-    roughness: float = Field(0.45, ge=0.0, le=1.0)
-    color_amount: float = Field(0.18, ge=0.0, le=1.0)
-    feather_radius: float = Field(12.0, ge=0.0, le=64.0)
+    amount: float = Field(0.2, ge=0.0, le=1.0, description="颗粒强度。")
+    size: float = Field(0.9, ge=0.2, le=2.0, description="颗粒尺寸。")
+    roughness: float = Field(0.45, ge=0.0, le=1.0, description="颗粒粗糙度。")
+    color_amount: float = Field(0.18, ge=0.0, le=1.0, description="彩色颗粒占比。")
+    feather_radius: float = Field(12.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class MoireParams(PackageParamsModel):
-    amount: float = Field(0.28, ge=0.0, le=1.0)
+    amount: float = Field(0.28, ge=0.0, le=1.0, description="摩尔纹抑制强度。")
 
 
 class ColorGradingParams(PackageParamsModel):
-    shadow_hue: float = Field(220.0, ge=0.0, le=360.0)
-    shadow_saturation: float = Field(0.12, ge=0.0, le=1.0)
-    midtone_hue: float = Field(32.0, ge=0.0, le=360.0)
-    midtone_saturation: float = Field(0.1, ge=0.0, le=1.0)
-    highlight_hue: float = Field(48.0, ge=0.0, le=360.0)
-    highlight_saturation: float = Field(0.12, ge=0.0, le=1.0)
-    balance: float = Field(0.0, ge=-1.0, le=1.0)
-    blending: float = Field(0.55, ge=0.0, le=1.0)
-    feather_radius: float = Field(16.0, ge=0.0, le=64.0)
+    shadow_hue: float = Field(220.0, ge=0.0, le=360.0, description="阴影色相。")
+    shadow_saturation: float = Field(0.12, ge=0.0, le=1.0, description="阴影饱和度。")
+    midtone_hue: float = Field(32.0, ge=0.0, le=360.0, description="中间调色相。")
+    midtone_saturation: float = Field(0.1, ge=0.0, le=1.0, description="中间调饱和度。")
+    highlight_hue: float = Field(48.0, ge=0.0, le=360.0, description="高光色相。")
+    highlight_saturation: float = Field(0.12, ge=0.0, le=1.0, description="高光饱和度。")
+    balance: float = Field(0.0, ge=-1.0, le=1.0, description="阴影/高光平衡。")
+    blending: float = Field(0.55, ge=0.0, le=1.0, description="分级融合强度。")
+    feather_radius: float = Field(16.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class LutParams(PackageParamsModel):
-    preset: str = Field("clean_portrait", min_length=2, max_length=32)
-    strength: float = Field(0.5, ge=0.0, le=1.0)
-    feather_radius: float = Field(16.0, ge=0.0, le=64.0)
+    preset: str = Field("clean_portrait", min_length=2, max_length=32, description="预设名，如 clean_portrait、warm_film、cool_fade。")
+    strength: float = Field(0.5, ge=0.0, le=1.0, description="预设强度。")
+    feather_radius: float = Field(16.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class BlackWhiteParams(PackageParamsModel):
-    contrast: float = Field(0.24, ge=0.0, le=1.0)
-    filter_color: str = Field("neutral", min_length=2, max_length=16)
-    tone_amount: float = Field(0.18, ge=0.0, le=1.0)
-    feather_radius: float = Field(16.0, ge=0.0, le=64.0)
+    contrast: float = Field(0.24, ge=0.0, le=1.0, description="黑白对比强度。")
+    filter_color: str = Field("neutral", min_length=2, max_length=16, description="黑白滤镜色，如 neutral、red、yellow、green、blue。")
+    tone_amount: float = Field(0.18, ge=0.0, le=1.0, description="黑白分色力度。")
+    feather_radius: float = Field(16.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class CalibrationParams(PackageParamsModel):
-    red_bias: float = Field(0.0, ge=-1.0, le=1.0)
-    green_bias: float = Field(0.0, ge=-1.0, le=1.0)
-    blue_bias: float = Field(0.0, ge=-1.0, le=1.0)
-    saturation_bias: float = Field(0.18, ge=-1.0, le=1.0)
-    feather_radius: float = Field(14.0, ge=0.0, le=64.0)
+    red_bias: float = Field(0.0, ge=-1.0, le=1.0, description="红原色偏移。")
+    green_bias: float = Field(0.0, ge=-1.0, le=1.0, description="绿原色偏移。")
+    blue_bias: float = Field(0.0, ge=-1.0, le=1.0, description="蓝原色偏移。")
+    saturation_bias: float = Field(0.18, ge=-1.0, le=1.0, description="整体饱和度偏置。")
+    feather_radius: float = Field(14.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class BlurParams(PackageParamsModel):
-    amount: float = Field(0.38, ge=0.0, le=1.0)
-    highlight_boost: float = Field(0.12, ge=0.0, le=1.0)
-    feather_radius: float = Field(18.0, ge=0.0, le=64.0)
+    amount: float = Field(0.38, ge=0.0, le=1.0, description="背景虚化强度。")
+    highlight_boost: float = Field(0.12, ge=0.0, le=1.0, description="虚化高光增强。")
+    feather_radius: float = Field(18.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class LensBlurParams(PackageParamsModel):
-    amount: float = Field(0.42, ge=0.0, le=1.0)
-    highlight_bloom: float = Field(0.16, ge=0.0, le=1.0)
-    feather_radius: float = Field(20.0, ge=0.0, le=64.0)
+    amount: float = Field(0.42, ge=0.0, le=1.0, description="镜头虚化强度。")
+    highlight_bloom: float = Field(0.16, ge=0.0, le=1.0, description="散景高光增强。")
+    feather_radius: float = Field(20.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class GlowParams(PackageParamsModel):
-    amount: float = Field(0.32, ge=0.0, le=1.0)
-    threshold: float = Field(0.62, ge=0.0, le=0.95)
-    warmth: float = Field(0.18, ge=-1.0, le=1.0)
-    feather_radius: float = Field(18.0, ge=0.0, le=64.0)
+    amount: float = Field(0.32, ge=0.0, le=1.0, description="Glow 强度。")
+    threshold: float = Field(0.62, ge=0.0, le=0.95, description="高光阈值。")
+    warmth: float = Field(0.18, ge=-1.0, le=1.0, description="Glow 冷暖偏移。")
+    feather_radius: float = Field(18.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class WholeImageDeterministicPackage(DeterministicImageOpPackage):

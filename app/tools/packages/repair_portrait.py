@@ -19,51 +19,51 @@ from app.tools.packages.extended_base import DeterministicImageOpPackage
 class RepairParams(PackageParamsModel):
     """Shared params for inpaint-based repair tools."""
 
-    strength: float = Field(0.35, ge=-1.0, le=1.0)
-    radius_px: float = Field(3.0, ge=1.0, le=24.0)
-    feather_radius: float = Field(8.0, ge=0.0, le=64.0)
-    detail_protection: float = Field(0.35, ge=0.0, le=1.0)
-    auto_detect: bool = True
-    small_spot_bias: float = Field(0.55, ge=0.0, le=1.0)
+    strength: float = Field(0.35, ge=-1.0, le=1.0, description="修复主强度。")
+    radius_px: float = Field(3.0, ge=1.0, le=24.0, description="修复半径。")
+    feather_radius: float = Field(8.0, ge=0.0, le=64.0, description="局部羽化半径。")
+    detail_protection: float = Field(0.35, ge=0.0, le=1.0, description="细节保护。")
+    auto_detect: bool = Field(True, description="无遮罩时自动找缺陷。")
+    small_spot_bias: float = Field(0.55, ge=0.0, le=1.0, description="偏向小点修复。")
 
 
 class SkinSmoothParams(PackageParamsModel):
     """Shared params for skin smoothing tools."""
 
-    strength: float = Field(0.35, ge=-1.0, le=1.0)
-    preserve_detail: float = Field(0.78, ge=0.0, le=1.0)
-    saturation_protection: float = Field(0.22, ge=0.0, le=1.0)
-    feather_radius: float = Field(18.0, ge=0.0, le=64.0)
+    strength: float = Field(0.35, ge=-1.0, le=1.0, description="柔肤主强度。")
+    preserve_detail: float = Field(0.78, ge=0.0, le=1.0, description="纹理保留。")
+    saturation_protection: float = Field(0.22, ge=0.0, le=1.0, description="饱和度保护。")
+    feather_radius: float = Field(18.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class PointColorParams(PackageParamsModel):
     """Params for point-color style targeted adjustments."""
 
-    strength: float = Field(0.25, ge=-1.0, le=1.0)
-    target_color: str = Field("orange", min_length=2, max_length=32)
-    target_hue: float | None = Field(default=None, ge=0.0, le=360.0)
-    range_width: float = Field(28.0, ge=8.0, le=90.0)
-    hue_shift: float = Field(0.0, ge=-1.0, le=1.0)
-    saturation_shift: float = Field(0.0, ge=-1.0, le=1.0)
-    luminance_shift: float = Field(0.0, ge=-1.0, le=1.0)
-    preserve_neutrals: float = Field(0.2, ge=0.0, le=1.0)
-    feather_radius: float = Field(16.0, ge=0.0, le=64.0)
+    strength: float = Field(0.25, ge=-1.0, le=1.0, description="精准调色主强度。")
+    target_color: str = Field("orange", min_length=2, max_length=32, description="目标颜色名，如 skin、orange、blue、white。")
+    target_hue: float | None = Field(default=None, ge=0.0, le=360.0, description="手动色相中心角。")
+    range_width: float = Field(28.0, ge=8.0, le=90.0, description="颜色选择宽度。")
+    hue_shift: float = Field(0.0, ge=-1.0, le=1.0, description="色相偏移。")
+    saturation_shift: float = Field(0.0, ge=-1.0, le=1.0, description="饱和度偏移。")
+    luminance_shift: float = Field(0.0, ge=-1.0, le=1.0, description="亮度偏移。")
+    preserve_neutrals: float = Field(0.2, ge=0.0, le=1.0, description="中性色保护。")
+    feather_radius: float = Field(16.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class RegionalEnhanceParams(PackageParamsModel):
     """Shared params for portrait-local enhancement tools."""
 
-    strength: float = Field(0.3, ge=-1.0, le=1.0)
-    exposure_boost: float = Field(0.0, ge=-1.0, le=1.0)
-    saturation_boost: float = Field(0.0, ge=-1.0, le=1.0)
-    warmth_shift: float = Field(0.0, ge=-1.0, le=1.0)
-    clarity_boost: float = Field(0.0, ge=-1.0, le=1.0)
-    smooth_amount: float = Field(0.0, ge=0.0, le=1.0)
-    sharpen_amount: float = Field(0.0, ge=0.0, le=1.0)
-    highlight_protection: float = Field(0.22, ge=0.0, le=1.0)
-    shadow_lift: float = Field(0.0, ge=0.0, le=1.0)
-    yellow_suppression: float = Field(0.0, ge=0.0, le=1.0)
-    feather_radius: float = Field(16.0, ge=0.0, le=64.0)
+    strength: float = Field(0.3, ge=-1.0, le=1.0, description="局部增强主强度。")
+    exposure_boost: float = Field(0.0, ge=-1.0, le=1.0, description="曝光增减。")
+    saturation_boost: float = Field(0.0, ge=-1.0, le=1.0, description="饱和度增减。")
+    warmth_shift: float = Field(0.0, ge=-1.0, le=1.0, description="冷暖偏移。")
+    clarity_boost: float = Field(0.0, ge=-1.0, le=1.0, description="清晰度增减。")
+    smooth_amount: float = Field(0.0, ge=0.0, le=1.0, description="柔化量。")
+    sharpen_amount: float = Field(0.0, ge=0.0, le=1.0, description="锐化量。")
+    highlight_protection: float = Field(0.22, ge=0.0, le=1.0, description="高光保护。")
+    shadow_lift: float = Field(0.0, ge=0.0, le=1.0, description="暗部提亮。")
+    yellow_suppression: float = Field(0.0, ge=0.0, le=1.0, description="压黄量。")
+    feather_radius: float = Field(16.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class BaseRepairPackage(DeterministicImageOpPackage):
@@ -363,9 +363,9 @@ class PointColorPackage(DeterministicImageOpPackage):
             raise ValueError("Point color params model is not configured.")
         params = parsed.model_dump()
         strength = parsed.strength
-        hue_shift = parsed.hue_shift * 14.0
-        saturation_shift = parsed.saturation_shift if parsed.saturation_shift != 0.0 else strength * 0.34
-        luminance_shift = parsed.luminance_shift if parsed.luminance_shift != 0.0 else strength * 0.18
+        hue_shift = parsed.hue_shift * 16.0
+        saturation_shift = parsed.saturation_shift if parsed.saturation_shift != 0.0 else strength * 0.42
+        luminance_shift = parsed.luminance_shift if parsed.luminance_shift != 0.0 else strength * 0.26
         return {
             "region": operation.get("region") or "whole_image",
             "params": params,
@@ -411,7 +411,7 @@ class UnderEyeBrightenPackage(BaseRegionalEnhancePackage):
         default_params={"highlight_protection": 0.28, "feather_radius": 14.0},
     )
     output_prefix = "psagent_under_eye_"
-    feature_defaults = {"exposure_boost": 0.16, "shadow_lift": 0.2, "smooth_amount": 0.08, "saturation_boost": -0.05}
+    feature_defaults = {"exposure_boost": 0.14, "shadow_lift": 0.18, "smooth_amount": 0.03, "saturation_boost": -0.04}
 
 
 class TeethWhitenPackage(BaseRegionalEnhancePackage):
@@ -439,7 +439,7 @@ class EyeBrightenPackage(BaseRegionalEnhancePackage):
         default_params={"highlight_protection": 0.18, "feather_radius": 12.0},
     )
     output_prefix = "psagent_eye_"
-    feature_defaults = {"exposure_boost": 0.12, "clarity_boost": 0.32, "sharpen_amount": 0.34, "saturation_boost": 0.06}
+    feature_defaults = {"exposure_boost": 0.1, "clarity_boost": 0.22, "sharpen_amount": 0.22, "saturation_boost": 0.04}
 
 
 class HairEnhancePackage(BaseRegionalEnhancePackage):

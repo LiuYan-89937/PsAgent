@@ -94,6 +94,30 @@ class EvaluateResultNodeTest(unittest.TestCase):
         self.assertIn("round_1", result["round_eval_reports"])
         self.assertFalse(result["approval_required"])
 
+    def test_evaluate_round_1_falls_back_when_critic_returns_empty_content(self) -> None:
+        state = {
+            "current_round": 1,
+            "input_images": ["/tmp/original.png"],
+            "selected_output": "/tmp/edited.png",
+            "request_text": "自然一点",
+            "edit_plan": {"operations": []},
+            "image_analysis": {"domain": "general"},
+            "execution_trace": [{"ok": True, "fallback_used": False}],
+        }
+
+        with (
+            patch("app.graph.nodes.evaluate_result.critic_model_available", return_value=True),
+            patch(
+                "app.graph.nodes.evaluate_result.evaluate_edit_result_with_qwen",
+                side_effect=RuntimeError("DashScope returned empty content."),
+            ),
+        ):
+            result = evaluate_round_1(state)
+
+        self.assertIn("round_1", result["round_eval_reports"])
+        self.assertEqual(result["eval_report"]["num_operations"], 1)
+        self.assertFalse(result["approval_required"])
+
     def test_finalize_round_1_result_promotes_round_report(self) -> None:
         state = {
             "round_eval_reports": {
@@ -147,6 +171,50 @@ class EvaluateResultNodeTest(unittest.TestCase):
 
         self.assertTrue(result["continue_to_round_2"])
         self.assertIn("round_1", result["round_eval_reports"])
+
+    def test_evaluate_round_1_continues_when_round_1_had_fallback(self) -> None:
+        state = {
+            "current_round": 1,
+            "mode": "explicit",
+            "request_text": "轻微提亮人像",
+            "request_intent": {"mode": "explicit", "requested_packages": [], "constraints": []},
+            "image_analysis": {"domain": "portrait", "issues": ["underexposed"]},
+            "execution_trace": [
+                {"ok": True, "fallback_used": False},
+                {"ok": False, "fallback_used": True},
+            ],
+            "fallback_trace": [
+                {
+                    "stage": "plan_execute_round_1",
+                    "source": "planner_tool_model",
+                    "location": "round_execution",
+                    "strategy": "finish_current_round",
+                    "message": "实时规划中断，保留当前轮已完成结果。",
+                }
+            ],
+            "selected_output": "/tmp/edited.png",
+        }
+
+        with patch("app.graph.nodes.evaluate_result.critic_model_available", return_value=False):
+            result = evaluate_round_1(state)
+
+        self.assertTrue(result["continue_to_round_2"])
+
+    def test_evaluate_round_1_continues_for_auto_portrait_request(self) -> None:
+        state = {
+            "current_round": 1,
+            "mode": "auto",
+            "request_text": "把人像修得更有质感一点",
+            "request_intent": {"mode": "auto", "requested_packages": [], "constraints": []},
+            "image_analysis": {"domain": "portrait", "issues": ["flat_face_light"]},
+            "execution_trace": [{"ok": True, "fallback_used": False}],
+            "selected_output": "/tmp/edited.png",
+        }
+
+        with patch("app.graph.nodes.evaluate_result.critic_model_available", return_value=False):
+            result = evaluate_round_1(state)
+
+        self.assertTrue(result["continue_to_round_2"])
 
 
 if __name__ == "__main__":

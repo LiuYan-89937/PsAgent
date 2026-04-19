@@ -15,14 +15,18 @@ class FakeGraph:
 
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir
+        self.last_payload: dict | None = None
 
-    def invoke(self, payload: dict) -> dict:
+    def invoke(self, payload: dict, config=None) -> dict:
+        self.last_payload = payload
         output_path = self.output_dir / "fake_output.png"
         Image.new("RGB", (16, 16), (180, 120, 80)).save(output_path)
+        request_text = payload.get("request_text") or ("auto generated instruction" if payload.get("mode") == "auto" else None)
         return {
             "candidate_outputs": [str(output_path)],
             "selected_output": str(output_path),
             "round_outputs": {"round_1": str(output_path)},
+            "request_text": request_text,
             "edit_plan": {
                 "mode": payload.get("mode", "explicit"),
                 "domain": "general",
@@ -112,6 +116,8 @@ class FakeGraph:
         }
 
     def stream(self, payload, config=None, stream_mode=None, version=None):
+        if isinstance(payload, dict):
+            self.last_payload = payload
         output_path = self.output_dir / "fake_output.png"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if not output_path.exists():
@@ -142,10 +148,16 @@ class FakeGraph:
             pass
 
         snapshot = Snapshot()
+        request_text = None
+        if isinstance(self.last_payload, dict):
+            request_text = self.last_payload.get("request_text") or (
+                "auto generated instruction" if self.last_payload.get("mode") == "auto" else None
+            )
         snapshot.values = {
             "candidate_outputs": [output_path],
             "selected_output": output_path,
             "round_outputs": {"round_1": output_path},
+            "request_text": request_text,
             "edit_plan": {
                 "mode": "explicit",
                 "domain": "general",
@@ -333,6 +345,61 @@ class ApiRoutesTest(unittest.TestCase):
         self.assertEqual(feedback.status_code, 200)
         self.assertEqual(feedback.json()["feedback_count"], 1)
 
+    def test_edit_without_instruction_uses_auto_beautify_instruction(self) -> None:
+        upload = self.client.post(
+            "/assets/upload",
+            files=[("files", ("test.png", self._build_png((20, 40, 60)), "image/png"))],
+        )
+        asset_id = upload.json()["items"][0]["asset_id"]
+
+        response = self.client.post(
+            "/edit",
+            json={
+                "user_id": "u1",
+                "auto_mode": True,
+                "input_asset_ids": [asset_id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(self.fake_graph.last_payload)
+        self.assertEqual(self.fake_graph.last_payload["request_text"], "")
+        self.assertEqual(response.json()["job"]["request_text"], "auto generated instruction")
+
+    def test_edit_and_stream_share_same_graph_input_flags(self) -> None:
+        upload = self.client.post(
+            "/assets/upload",
+            files=[("files", ("test.png", self._build_png((20, 40, 60)), "image/png"))],
+        )
+        asset_id = upload.json()["items"][0]["asset_id"]
+
+        edit = self.client.post(
+            "/edit",
+            json={
+                "user_id": "u1",
+                "instruction": "提亮一点",
+                "planner_thinking_mode": True,
+                "input_asset_ids": [asset_id],
+            },
+        )
+        self.assertEqual(edit.status_code, 200)
+        self.assertTrue(self.fake_graph.last_payload["planner_thinking_mode"])
+
+        with self.client.stream(
+            "POST",
+            "/edit/stream",
+            json={
+                "user_id": "u1",
+                "instruction": "提亮一点",
+                "planner_thinking_mode": True,
+                "input_asset_ids": [asset_id],
+            },
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            _ = "".join(response.iter_text())
+
+        self.assertTrue(self.fake_graph.last_payload["planner_thinking_mode"])
+
     def test_upload_rejects_invalid_image(self) -> None:
         upload = self.client.post(
             "/assets/upload",
@@ -374,7 +441,13 @@ class ApiRoutesTest(unittest.TestCase):
             request_text="test",
             input_asset_ids=[],
         )
-        self.job_store.update(job.job_id, status="review_required", approval_required=True)
+        self.job_store.set_review_state(
+            job.job_id,
+            status="review_required",
+            approval_required=True,
+            current_stage="human_review",
+            current_message="等待人工确认",
+        )
         response = self.client.post(
             "/resume-review",
             json={"job_id": job.job_id, "approved": True, "note": "ok"},

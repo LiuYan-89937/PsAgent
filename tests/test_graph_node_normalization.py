@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 
+from PIL import Image
+
+from app.graph.nodes.bootstrap_request import bootstrap_request
 from app.graph.nodes.human_review import human_review
 from app.graph.nodes.load_context import load_context
 from app.graph.nodes.parse_request import parse_request
-from app.graph.nodes.route_executor import route_executor
 from app.graph.nodes.update_memory import update_memory
 
 
@@ -37,25 +41,19 @@ class GraphNodeNormalizationTest(unittest.TestCase):
         self.assertEqual(result["request_intent"]["mode"], "explicit")
         self.assertTrue(result["request_intent"]["requested_packages"])
 
-    def test_route_executor_normalizes_plan(self) -> None:
-        result = route_executor(
-            {
-                "edit_plan": {
+    def test_bootstrap_request_returns_normalized_request_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = str(Path(tmpdir) / "input.png")
+            Image.new("RGB", (32, 32), (90, 100, 110)).save(image_path)
+            result = bootstrap_request(
+                {
                     "mode": "explicit",
-                    "domain": "general",
-                    "preserve": [],
-                    "operations": [
-                        {
-                            "op": "adjust_exposure",
-                            "region": "main_subject",
-                            "params": {"strength": 0.2},
-                        }
-                    ],
+                    "request_text": "提亮一点",
+                    "input_images": [image_path],
                 }
-            }
-        )
+            )
 
-        self.assertEqual(result["edit_plan"]["executor"], "deterministic")
+        self.assertEqual(result["request_text"], "提亮一点")
 
     def test_human_review_normalizes_payload(self) -> None:
         result = human_review({"approval_payload": {"reason": "mask edge", "summary": "需要人工确认"}})
@@ -74,6 +72,22 @@ class GraphNodeNormalizationTest(unittest.TestCase):
             }
         )
         self.assertEqual(result["memory_write_candidates"][0]["key"], "tone_preference")
+
+    def test_update_memory_skips_invalid_candidates_without_raising(self) -> None:
+        result = update_memory(
+            {
+                "memory_write_candidates": [
+                    {
+                        "op": "adjust_highlights_shadows",
+                        "error": "Skipped: segmentation returned no usable mask.",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(result["memory_write_candidates"], [])
+        self.assertTrue(result["fallback_trace"])
+        self.assertEqual(result["fallback_trace"][0]["strategy"], "drop_invalid_memory_candidate")
 
 
 if __name__ == "__main__":

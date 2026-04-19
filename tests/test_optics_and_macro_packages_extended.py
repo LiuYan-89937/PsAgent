@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from app.tools.packages import (
@@ -87,6 +88,20 @@ class OpticsAndMacroPackagesExtendedTest(unittest.TestCase):
                 result = package.execute({"op": package.name, "region": "focus", "params": params}, self.context)
                 self.assertTrue(result.ok, msg=f"{package.name} failed with: {result.error}")
 
+    def test_glow_highlight_emphasizes_bright_region(self) -> None:
+        package = GlowHighlightPackage()
+        result = package.execute(
+            {"op": "glow_highlight", "region": "whole_image", "params": {"amount": 0.35, "threshold": 0.55}},
+            self.context,
+        )
+
+        self.assertTrue(result.ok)
+        original = np.asarray(Image.open(self.image_path).convert("RGB"), dtype=np.float32)
+        output = np.asarray(Image.open(result.output_image or "").convert("RGB"), dtype=np.float32)
+        bright_delta = np.abs(output[24, 24] - original[24, 24]).mean()
+        dark_delta = np.abs(output[4, 4] - original[4, 4]).mean()
+        self.assertGreater(bright_delta, dark_delta)
+
     def test_macro_expansion_produces_expected_substeps_and_hybrid_requirement(self) -> None:
         operation = {"op": "portrait_retouch", "region": "whole_image", "params": {"strength": 0.35}}
         expanded = expand_macro_operation(operation)
@@ -96,6 +111,27 @@ class OpticsAndMacroPackagesExtendedTest(unittest.TestCase):
             ["blemish_remove", "under_eye_brighten", "skin_smooth", "eye_brighten", "teeth_whiten", "hair_enhance"],
         )
         self.assertTrue(operations_require_hybrid([operation]))
+
+    def test_backlight_and_summer_macros_expand_into_stronger_generic_chains(self) -> None:
+        backlight = expand_macro_operation({"op": "portrait_backlight_repair", "region": "whole_image", "params": {"strength": 0.4}})
+        airy = expand_macro_operation({"op": "summer_airy_look", "region": "whole_image", "params": {"strength": 0.4}})
+        dress = expand_macro_operation({"op": "wedding_dress_protect", "region": "whole_image", "params": {"strength": 0.4}})
+
+        self.assertIn("under_eye_brighten", [item["op"] for item in backlight])
+        self.assertIn("glow_highlight", [item["op"] for item in airy])
+        self.assertIn("adjust_whites_blacks", [item["op"] for item in airy])
+        self.assertIn("adjust_white_balance", [item["op"] for item in dress])
+        self.assertIn("adjust_exposure", [item["op"] for item in dress])
+
+    def test_macro_mask_prompts_are_short_labels(self) -> None:
+        backlight = expand_macro_operation({"op": "portrait_backlight_repair", "region": "whole_image", "params": {"strength": 0.4}})
+        dress = expand_macro_operation({"op": "wedding_dress_protect", "region": "whole_image", "params": {"strength": 0.4}})
+        airy = expand_macro_operation({"op": "summer_airy_look", "region": "whole_image", "params": {"strength": 0.4}})
+
+        self.assertEqual(backlight[0]["params"]["mask_prompt"], "person")
+        self.assertEqual(backlight[2]["params"]["mask_prompt"], "eye")
+        self.assertEqual(dress[0]["params"]["mask_prompt"], "dress")
+        self.assertEqual(airy[3]["params"]["mask_prompt"], "trees")
 
 
 if __name__ == "__main__":

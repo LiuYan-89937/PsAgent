@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, onBeforeUnmount, watch } from 'vue'
 import { streamEdit, getJob, resumeReview } from '@/lib/api'
 import type { AssetResponse, SseEventPayload, JobDetailResponse } from '@/types/api'
 
@@ -22,6 +22,44 @@ const jobDetail = ref<JobDetailResponse | null>(null)
 const errorMsg = ref('')
 const errorDetail = ref<Record<string, unknown> | null>(null)
 const pollTimer = ref<number | null>(null)
+
+function loadBoolSetting(key: string, defaultValue: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw === null) return defaultValue
+    return raw === 'true'
+  } catch {
+    return defaultValue
+  }
+}
+
+const traceEnabled = ref(loadBoolSetting('psagent.trace.enabled', false))
+const debugEnabled = ref(loadBoolSetting('psagent.debug.enabled', false))
+const plannerThinkingEnabled = ref(loadBoolSetting('psagent.planner.thinking.enabled', false))
+
+watch(traceEnabled, (value) => {
+  try {
+    window.localStorage.setItem('psagent.trace.enabled', String(value))
+  } catch {
+    // ignore
+  }
+})
+
+watch(debugEnabled, (value) => {
+  try {
+    window.localStorage.setItem('psagent.debug.enabled', String(value))
+  } catch {
+    // ignore
+  }
+})
+
+watch(plannerThinkingEnabled, (value) => {
+  try {
+    window.localStorage.setItem('psagent.planner.thinking.enabled', String(value))
+  } catch {
+    // ignore
+  }
+})
 
 function clearPollTimer() {
   if (pollTimer.value != null) {
@@ -68,7 +106,7 @@ function handleCancelUpload() {
   currentState.value = 'idle'
 }
 
-async function handleStartEdit(instruction: string) {
+async function handleStartEdit(instruction?: string | null, autoMode = false) {
   if (!currentAsset.value) return
 
   clearPollTimer()
@@ -83,7 +121,9 @@ async function handleStartEdit(instruction: string) {
   
   const payload = {
     user_id: 'web-user',
-    instruction,
+    instruction: instruction?.trim() || undefined,
+    auto_mode: autoMode,
+    planner_thinking_mode: plannerThinkingEnabled.value,
     input_asset_ids: [currentAsset.value.asset_id]
   }
 
@@ -130,6 +170,10 @@ async function handleStartEdit(instruction: string) {
       currentState.value = 'fatal_error'
     }
   }
+}
+
+async function handleAutoBeautify() {
+  await handleStartEdit(undefined, true)
 }
 
 async function fetchJobDetailAndComplete() {
@@ -222,6 +266,20 @@ onBeforeUnmount(() => {
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="logo-icon"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
         <span class="font-semibold">PsAgent</span>
       </div>
+      <div class="header-toggles">
+        <label class="toggle-chip">
+          <input v-model="plannerThinkingEnabled" type="checkbox" />
+          <span>Thinking</span>
+        </label>
+        <label class="toggle-chip">
+          <input v-model="traceEnabled" type="checkbox" />
+          <span>Trace</span>
+        </label>
+        <label class="toggle-chip">
+          <input v-model="debugEnabled" type="checkbox" />
+          <span>Debug</span>
+        </label>
+      </div>
       <div v-if="errorMsg" class="error-toast">
         {{ errorMsg }}
       </div>
@@ -247,13 +305,18 @@ onBeforeUnmount(() => {
           <PromptInput 
             :asset="currentAsset"
             @submit="handleStartEdit"
+            @auto-beautify="handleAutoBeautify"
             @cancel="handleCancelUpload"
           />
         </div>
 
         <!-- State: PROCESSING -->
         <div class="view-container" v-else-if="currentState === 'processing'" key="processing">
-          <ProcessViewer :events="sseEvents" />
+          <ProcessViewer v-if="traceEnabled" :events="sseEvents" />
+          <div v-else class="glass-panel text-center processing-panel">
+            <h2>正在处理中</h2>
+            <p>Agent 正在生成结果。打开 Trace 可以查看实时流程。</p>
+          </div>
         </div>
 
         <!-- State: REVIEW_REQUIRED -->
@@ -273,7 +336,7 @@ onBeforeUnmount(() => {
             <h2>处理完成</h2>
             <button class="btn-secondary" @click="handleReset">处理新图片</button>
           </div>
-          <ResultViewer :job-detail="jobDetail" />
+          <ResultViewer :job-detail="jobDetail" :show-trace="traceEnabled" :show-debug="debugEnabled" />
         </div>
 
         <!-- State: FATAL ERROR -->
@@ -355,6 +418,30 @@ onBeforeUnmount(() => {
   color: var(--accent-primary);
 }
 
+.header-toggles {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  margin-right: 16px;
+}
+
+.toggle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+  color: var(--text-inverse);
+  font-size: 0.82rem;
+}
+
+.toggle-chip input {
+  accent-color: var(--accent-primary);
+}
+
 .error-detail-card {
   width: min(100%, 720px);
   margin: 0 auto 24px;
@@ -430,6 +517,20 @@ onBeforeUnmount(() => {
 
 .view-wide {
   max-width: 1200px;
+}
+
+.processing-panel {
+  padding: 56px 40px;
+  width: min(100%, 560px);
+}
+
+.processing-panel h2 {
+  margin: 0 0 10px;
+}
+
+.processing-panel p {
+  margin: 0;
+  color: var(--text-muted);
 }
 
 .hero {

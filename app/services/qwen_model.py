@@ -16,9 +16,9 @@ from PIL import Image
 
 
 DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_TEXT_MODEL = "qwen3.6-plus"
-DEFAULT_VISION_MODEL = "qwen3.6-plus"
-DEFAULT_CRITIC_MODEL = "qwen3.6-plus"
+DEFAULT_TEXT_MODEL = "qwen3.5-plus"
+DEFAULT_VISION_MODEL = "qwen3.5-plus"
+DEFAULT_CRITIC_MODEL = "qwen3.5-plus"
 DEFAULT_DASHSCOPE_TIMEOUT_SECONDS = 300
 
 
@@ -135,6 +135,7 @@ def call_qwen_chat_completion_raw(
     response_format: dict[str, Any] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any | None = None,
+    enable_thinking: bool | None = None,
 ) -> dict[str, Any]:
     """Call DashScope-compatible chat completions with raw messages."""
 
@@ -158,6 +159,8 @@ def call_qwen_chat_completion_raw(
         body["tools"] = tools
     if tool_choice is not None:
         body["tool_choice"] = tool_choice
+    if enable_thinking is not None:
+        body["enable_thinking"] = enable_thinking
 
     req = request.Request(
         url=f"{base_url}/chat/completions",
@@ -218,6 +221,7 @@ def call_qwen_for_tool_message(
     image_paths: list[str] | None = None,
     temperature: float = 0.1,
     tool_choice: Any = "required",
+    enable_thinking: bool | None = None,
 ) -> dict[str, Any]:
     """Call Qwen in tool-calling mode and return the assistant message."""
 
@@ -237,6 +241,7 @@ def call_qwen_for_tool_message(
         temperature=temperature,
         tools=tools,
         tool_choice=tool_choice,
+        enable_thinking=enable_thinking,
     )
 
     choices = response_payload.get("choices") or []

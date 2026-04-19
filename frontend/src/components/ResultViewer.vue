@@ -5,14 +5,24 @@ import ExecutionSummary from '@/components/ExecutionSummary.vue'
 
 const props = defineProps<{
   jobDetail: JobDetailResponse
+  showTrace?: boolean
+  showDebug?: boolean
 }>()
 
 const inputImage = computed(() => props.jobDetail.input_assets?.[0]?.content_url)
 const outputImage = computed(() => props.jobDetail.selected_output?.content_url)
+const effectivePrompt = computed(() => props.jobDetail.job.request_text)
 </script>
 
 <template>
   <div class="result-viewer">
+    <section v-if="effectivePrompt" class="glass-panel prompt-panel">
+      <div class="prompt-head">
+        <h3>本次实际使用的提示词</h3>
+      </div>
+      <p class="prompt-copy">{{ effectivePrompt }}</p>
+    </section>
+
     <div class="images-comparison">
       <div class="image-box" v-if="inputImage">
         <span class="badge">原图 (Before)</span>
@@ -24,7 +34,12 @@ const outputImage = computed(() => props.jobDetail.selected_output?.content_url)
       </div>
     </div>
 
-    <ExecutionSummary :job-detail="jobDetail" />
+    <ExecutionSummary
+      v-if="showTrace || showDebug"
+      :job-detail="jobDetail"
+      :show-trace="showTrace ?? false"
+      :show-debug="showDebug ?? false"
+    />
   </div>
 </template>
 
@@ -34,6 +49,23 @@ const outputImage = computed(() => props.jobDetail.selected_output?.content_url)
   flex-direction: column;
   gap: 32px;
   width: 100%;
+}
+
+.prompt-panel {
+  padding: 20px 22px;
+}
+
+.prompt-head h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.prompt-copy {
+  margin: 0;
+  color: var(--text-main);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .images-comparison {

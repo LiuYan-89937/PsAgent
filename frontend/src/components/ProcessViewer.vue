@@ -12,6 +12,9 @@ const displayEvents = computed(() => {
     if (!event.message) return false
     return [
       'job_created',
+      'bootstrap_started',
+      'bootstrap_finished',
+      'bootstrap_failed',
       'round_started',
       'node_started',
       'planner_started',
@@ -22,9 +25,11 @@ const displayEvents = computed(() => {
       'planner_round_finished',
       'segmentation_started',
       'segmentation_finished',
+      'segmentation_skipped',
       'segmentation_failed',
       'package_started',
       'package_finished',
+      'package_skipped',
       'package_failed',
       'node_failed',
       'interrupt',

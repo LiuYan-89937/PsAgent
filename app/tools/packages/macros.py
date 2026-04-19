@@ -14,8 +14,8 @@ from app.tools.packages.base import OperationContext, PackageParamsModel, Packag
 class MacroParams(PackageParamsModel):
     """Shared params for macro-style tools."""
 
-    strength: float = Field(0.32, ge=0.0, le=1.0)
-    preserve_natural: bool = True
+    strength: float = Field(0.32, ge=0.0, le=1.0, description="复合工具总强度，用于整体放大或收敛默认修图配方。")
+    preserve_natural: bool = Field(True, description="是否优先保持自然观感，避免复合工具把结果推得太重。")
 
 
 def _mask_payload(prompt: str, negative_prompt: str | None = None) -> dict[str, Any]:
@@ -24,8 +24,6 @@ def _mask_payload(prompt: str, negative_prompt: str | None = None) -> dict[str, 
         "mask_prompt": prompt,
         "mask_semantic_type": True,
     }
-    if negative_prompt:
-        payload["mask_negative_prompt"] = negative_prompt
     return payload
 
 
@@ -132,8 +130,7 @@ class PortraitNaturalWhiteningPackage(MacroPackage):
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
         mask = _mask_payload(
-            "the subject's face, neck skin, and other visible skin",
-            "hair, clothing, accessories, background",
+            "face",
         )
         return [
             {"op": "point_color", "region": "skin whitening area", "params": {"strength": strength * 0.5, "target_color": "skin", "luminance_shift": 0.12 + strength * 0.08, "saturation_shift": -0.05 - strength * 0.04, **mask}},
@@ -155,8 +152,7 @@ class PortraitSkinCleanTonePackage(MacroPackage):
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
         mask = _mask_payload(
-            "the subject's face, neck skin, and other visible skin",
-            "hair, clothing, accessories, background",
+            "face",
         )
         return [
             {"op": "point_color", "region": "clean skin tone area", "params": {"strength": strength * 0.42, "target_color": "skin", "saturation_shift": -0.04, "luminance_shift": 0.06 + strength * 0.05, **mask}},
@@ -178,13 +174,44 @@ class PortraitBacklightRepairPackage(MacroPackage):
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
         subject_mask = _mask_payload(
-            "the subject's face, neck skin, and visible upper body affected by backlight",
-            "hair, background, unrelated objects",
+            "person",
+        )
+        under_eye_mask = _mask_payload(
+            "eye",
         )
         return [
-            {"op": "adjust_exposure", "region": "backlit portrait subject", "params": {"strength": 0.16 + strength * 0.22, "max_stops": 1.45, **subject_mask}},
-            {"op": "adjust_highlights_shadows", "region": "backlit portrait subject", "params": {"strength": 0.14 + strength * 0.16, "tone_amount": 0.3, **subject_mask}},
-            {"op": "point_color", "region": "backlit portrait subject", "params": {"strength": strength * 0.3, "target_color": "skin", "luminance_shift": 0.04, "saturation_shift": 0.03, **subject_mask}},
+            {
+                "op": "adjust_exposure",
+                "region": "backlit portrait subject",
+                "params": {"strength": 0.22 + strength * 0.28, "max_stops": 1.7, "feather_radius": 28.0, **subject_mask},
+            },
+            {
+                "op": "adjust_highlights_shadows",
+                "region": "backlit portrait subject",
+                "params": {
+                    "strength": 0.18 + strength * 0.18,
+                    "tone_amount": 0.34,
+                    "midtone_contrast": 0.12,
+                    "feather_radius": 28.0,
+                    **subject_mask,
+                },
+            },
+            {
+                "op": "under_eye_brighten",
+                "region": "backlit portrait under eye area",
+                "params": {"strength": 0.08 + strength * 0.14, **under_eye_mask},
+            },
+            {
+                "op": "point_color",
+                "region": "backlit portrait subject",
+                "params": {
+                    "strength": strength * 0.34,
+                    "target_color": "skin",
+                    "luminance_shift": 0.06 + strength * 0.05,
+                    "saturation_shift": 0.03 + strength * 0.03,
+                    **subject_mask,
+                },
+            },
         ]
 
 
@@ -201,13 +228,40 @@ class WeddingDressProtectPackage(MacroPackage):
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
         dress_mask = _mask_payload(
-            "the subject's wedding dress or white dress area",
-            "face, skin, hair, background",
+            "dress",
         )
         return [
-            {"op": "adjust_highlights_shadows", "region": "wedding dress area", "params": {"strength": 0.14 + strength * 0.12, "tone_amount": 0.24, **dress_mask}},
-            {"op": "point_color", "region": "wedding dress area", "params": {"strength": strength * 0.24, "target_color": "white", "saturation_shift": -0.08, "luminance_shift": 0.1, **dress_mask}},
-            {"op": "adjust_texture", "region": "wedding dress area", "params": {"amount": 0.05 + strength * 0.08, "detail_scale": 0.9, **dress_mask}},
+            {
+                "op": "adjust_highlights_shadows",
+                "region": "wedding dress area",
+                "params": {"strength": 0.18 + strength * 0.14, "tone_amount": 0.3, "feather_radius": 20.0, **dress_mask},
+            },
+            {
+                "op": "adjust_exposure",
+                "region": "wedding dress area",
+                "params": {"strength": 0.05 + strength * 0.07, "max_stops": 1.35, "feather_radius": 18.0, **dress_mask},
+            },
+            {
+                "op": "point_color",
+                "region": "wedding dress area",
+                "params": {
+                    "strength": strength * 0.3,
+                    "target_color": "white",
+                    "saturation_shift": -0.12,
+                    "luminance_shift": 0.14 + strength * 0.05,
+                    **dress_mask,
+                },
+            },
+            {
+                "op": "adjust_white_balance",
+                "region": "wedding dress area",
+                "params": {"strength": -0.02 - strength * 0.03, "protect_saturated": 0.42, **dress_mask},
+            },
+            {
+                "op": "adjust_texture",
+                "region": "wedding dress area",
+                "params": {"amount": 0.08 + strength * 0.08, "detail_scale": 0.92, **dress_mask},
+            },
         ]
 
 
@@ -224,14 +278,46 @@ class SummerAiryLookPackage(MacroPackage):
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
         background_mask = _mask_payload(
-            "the background behind the main subject",
-            "person, face, skin, foreground objects",
+            "trees",
         )
         return [
-            {"op": "adjust_white_balance", "region": "whole_image", "params": {"strength": 0.06 + strength * 0.08, "protect_saturated": 0.34}},
-            {"op": "adjust_vibrance_saturation", "region": "whole_image", "params": {"strength": 0.08 + strength * 0.14, "protect_skin": 0.42}},
-            {"op": "adjust_dehaze", "region": "summer airy background", "params": {"amount": 0.08 + strength * 0.08, "luminance_protection": 0.34, **background_mask}},
-            {"op": "vignette", "region": "whole_image", "params": {"amount": -0.08 - strength * 0.06, "midpoint": 0.72}},
+            {
+                "op": "adjust_white_balance",
+                "region": "whole_image",
+                "params": {"strength": 0.09 + strength * 0.1, "protect_saturated": 0.36},
+            },
+            {
+                "op": "adjust_vibrance_saturation",
+                "region": "whole_image",
+                "params": {"strength": 0.12 + strength * 0.16, "protect_skin": 0.42, "protect_highlights": 0.26},
+            },
+            {
+                "op": "adjust_whites_blacks",
+                "region": "whole_image",
+                "params": {"whites_amount": 0.08 + strength * 0.08, "blacks_amount": -0.03},
+            },
+            {
+                "op": "point_color",
+                "region": "summer airy background greens",
+                "params": {
+                    "strength": 0.12 + strength * 0.1,
+                    "target_color": "green",
+                    "saturation_shift": 0.06 + strength * 0.04,
+                    "luminance_shift": 0.08 + strength * 0.06,
+                    **background_mask,
+                },
+            },
+            {
+                "op": "adjust_dehaze",
+                "region": "summer airy background",
+                "params": {"amount": 0.12 + strength * 0.1, "luminance_protection": 0.34, "feather_radius": 24.0, **background_mask},
+            },
+            {
+                "op": "glow_highlight",
+                "region": "whole_image",
+                "params": {"amount": 0.08 + strength * 0.08, "threshold": 0.7, "warmth": 0.18},
+            },
+            {"op": "vignette", "region": "whole_image", "params": {"amount": -0.1 - strength * 0.08, "midpoint": 0.76}},
         ]
 
 
@@ -247,11 +333,11 @@ class PortraitRetouchPackage(MacroPackage):
 
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
-        skin_mask = _mask_payload("the subject's face, neck skin, and other visible skin", "hair, clothing, accessories, background")
-        under_eye_mask = _mask_payload("the subject's under-eye shadow area", "eyebrows, hair, background")
-        eye_mask = _mask_payload("the subject's eyes and irises", "skin, hair, background")
-        teeth_mask = _mask_payload("the subject's visible teeth", "lips, skin, background")
-        hair_mask = _mask_payload("the subject's hair and loose hair edges", "face, skin, clothing, background")
+        skin_mask = _mask_payload("face")
+        under_eye_mask = _mask_payload("eye")
+        eye_mask = _mask_payload("eye")
+        teeth_mask = _mask_payload("teeth")
+        hair_mask = _mask_payload("hair")
         return [
             {"op": "blemish_remove", "region": "portrait blemish area", "params": {"strength": 0.12 + strength * 0.22, **skin_mask}},
             {"op": "under_eye_brighten", "region": "portrait under eye area", "params": {"strength": 0.14 + strength * 0.18, **under_eye_mask}},
@@ -274,7 +360,7 @@ class PortraitHairDetailBoostPackage(MacroPackage):
 
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
-        hair_mask = _mask_payload("the subject's hair and loose hair edges", "face, skin, background")
+        hair_mask = _mask_payload("hair")
         return [
             {"op": "hair_enhance", "region": "hair detail area", "params": {"strength": 0.14 + strength * 0.18, **hair_mask}},
             {"op": "sharpen", "region": "hair detail area", "params": {"strength": 0.08 + strength * 0.1, "highlight_protection": 0.18, **hair_mask}},
@@ -293,7 +379,7 @@ class ProductSpecularEnhancePackage(MacroPackage):
 
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
-        spec_mask = _mask_payload("product specular highlights, glossy edges, and reflective surfaces", "background, person")
+        spec_mask = _mask_payload("spray")
         return [
             {"op": "glow_highlight", "region": "product specular area", "params": {"amount": 0.12 + strength * 0.12, "threshold": 0.68, **spec_mask}},
             {"op": "sharpen", "region": "product specular area", "params": {"strength": 0.1 + strength * 0.12, "highlight_protection": 0.12, **spec_mask}},
@@ -313,7 +399,7 @@ class CleanupSkinBlemishesPackage(MacroPackage):
 
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
-        skin_mask = _mask_payload("the subject's visible skin with small blemishes", "hair, clothing, background")
+        skin_mask = _mask_payload("face")
         return [
             {"op": "blemish_remove", "region": "skin blemish area", "params": {"strength": 0.14 + strength * 0.24, **skin_mask}},
             {"op": "skin_smooth", "region": "skin blemish area", "params": {"strength": 0.05 + strength * 0.08, **skin_mask}},
@@ -332,7 +418,7 @@ class CleanupDistractingObjectsPackage(MacroPackage):
 
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
-        object_mask = _mask_payload("the distracting object or clutter that should be removed", "main subject, important foreground")
+        object_mask = _mask_payload("object")
         return [{"op": "remove_heal", "region": "distracting object area", "params": {"strength": 0.18 + strength * 0.3, **object_mask}}]
 
 
@@ -348,7 +434,7 @@ class RemovePassersbyPackage(MacroPackage):
 
     def expand(self, operation: dict[str, Any], context: OperationContext) -> list[dict[str, Any]]:
         strength = _macro_strength(operation)
-        people_mask = _mask_payload("background passersby and distracting people", "main subject, foreground objects")
+        people_mask = _mask_payload("passersby")
         return [{"op": "remove_heal", "region": "passersby area", "params": {"strength": 0.22 + strength * 0.32, "radius_px": 4.0, **people_mask}}]
 
 

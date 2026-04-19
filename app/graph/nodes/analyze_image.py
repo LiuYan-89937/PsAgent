@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from app.graph.fallbacks import append_fallback_trace
 from app.graph.state import AnalyzeImageResult, EditState, ImageQualityMetrics
 from app.services.analyze_image_model import (
     analyze_image_model_available,
@@ -107,18 +108,49 @@ def analyze_image(state: EditState) -> dict:
 
     basic_analysis = _compute_basic_image_analysis(input_images[0])
     if analyze_image_model_available():
-        model_analysis = generate_image_analysis_with_qwen(
-            image_path=input_images[0],
-            request_text=str(state.get("request_text") or ""),
-            basic_metrics=basic_analysis["metrics"],
+        try:
+            model_analysis = generate_image_analysis_with_qwen(
+                image_path=input_images[0],
+                request_text=str(state.get("request_text") or ""),
+                basic_metrics=basic_analysis["metrics"],
+            )
+            merged_analysis = dict(basic_analysis)
+            for key in ("domain", "scene_tags", "issues", "subjects", "segmentation_hints", "summary"):
+                if key in model_analysis:
+                    merged_analysis[key] = model_analysis[key]
+            merged_analysis["model_analysis"] = model_analysis
+            validated = AnalyzeImageResult.model_validate(merged_analysis)
+            return {"image_analysis": validated.model_dump(mode="json")}
+        except RuntimeError as error:
+            fallback_trace = append_fallback_trace(
+                state.get("fallback_trace"),
+                stage="analyze_image",
+                source="analyze_image_model",
+                location="image_analysis",
+                strategy="basic_image_analysis",
+                message="图像分析模型不可用，改用基础图像分析。",
+                error=str(error),
+            )
+            validated = AnalyzeImageResult.model_validate(basic_analysis)
+            return {
+                "image_analysis": validated.model_dump(mode="json"),
+                "fallback_trace": fallback_trace,
+            }
+    else:
+        fallback_trace = append_fallback_trace(
+            state.get("fallback_trace"),
+            stage="analyze_image",
+            source="analyze_image_model",
+            location="image_analysis",
+            strategy="basic_image_analysis",
+            message="图像分析模型不可用，改用基础图像分析。",
+            error=None,
         )
-        merged_analysis = dict(basic_analysis)
-        for key in ("domain", "scene_tags", "issues", "subjects", "segmentation_hints", "summary"):
-            if key in model_analysis:
-                merged_analysis[key] = model_analysis[key]
-        merged_analysis["model_analysis"] = model_analysis
-        validated = AnalyzeImageResult.model_validate(merged_analysis)
-        return {"image_analysis": validated.model_dump(mode="json")}
+        validated = AnalyzeImageResult.model_validate(basic_analysis)
+        return {
+            "image_analysis": validated.model_dump(mode="json"),
+            "fallback_trace": fallback_trace,
+        }
 
     validated = AnalyzeImageResult.model_validate(basic_analysis)
     return {

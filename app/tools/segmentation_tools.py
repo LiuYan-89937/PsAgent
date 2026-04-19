@@ -64,6 +64,14 @@ class FalImageSegError(SegmentationProviderError):
     """Raised when the fal SAM 3 segmentation pipeline cannot complete."""
 
 
+class FalImageSegAttemptsError(FalImageSegError):
+    """Raised when fal segmentation exhausts multiple prompt strategies."""
+
+    def __init__(self, message: str, *, attempts: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+
+
 @dataclass(slots=True)
 class SegmentationResult:
     """Standardized result for a provider-backed segmentation request."""
@@ -83,6 +91,12 @@ class SegmentationResult:
     semantic_type: bool | None = None
     fallback_used: bool = False
     requested_provider: str | None = None
+    attempt_index: int | None = None
+    attempt_strategy: str | None = None
+    requested_prompt: str | None = None
+    effective_prompt: str | None = None
+    revert_mask: bool | None = None
+    attempts: tuple[dict[str, Any], ...] = ()
 
 
 AliyunSegmentationResult = SegmentationResult
@@ -459,6 +473,14 @@ def _extract_fal_output_url(response: dict[str, Any]) -> str:
     raise FalImageSegError("fal segmentation response did not include an output image URL.")
 
 
+def is_recoverable_empty_segmentation_error(error: Exception) -> bool:
+    """Return whether a segmentation error means no usable mask was produced."""
+
+    if not isinstance(error, FalImageSegError):
+        return False
+    return "did not include an output image url" in str(error).lower()
+
+
 def _default_fal_prompt_for_region(region: str) -> str:
     """Return the default SAM 3 prompt for a region label."""
 
@@ -467,8 +489,100 @@ def _default_fal_prompt_for_region(region: str) -> str:
     if region == "main_subject":
         return "main visual subject"
     if region == "background":
-        return "main visual subject"
+        return "background"
     return region
+
+
+def _is_background_retry_candidate(region: str, prompt: str | None) -> bool:
+    """Return whether the request looks like a semantic background selection."""
+
+    if region == "background":
+        return True
+    normalized_prompt = _normalize_fal_prompt_label(prompt or "", region=region)
+    return normalized_prompt in {"background", "trees", "haze"}
+
+
+def _background_retry_attempts(region: str, prompt: str | None) -> list[dict[str, Any]]:
+    """Build a fixed background retry sequence for text-guided segmentation."""
+
+    direct_prompt = _normalize_fal_prompt_label(prompt or _default_fal_prompt_for_region(region), region=region)
+    return [
+        {
+            "attempt_index": 0,
+            "attempt_strategy": "direct_background_prompt",
+            "requested_prompt": direct_prompt,
+            "effective_prompt": direct_prompt,
+            "revert_mask": False,
+        },
+        {
+            "attempt_index": 1,
+            "attempt_strategy": "invert_person",
+            "requested_prompt": direct_prompt,
+            "effective_prompt": "person",
+            "revert_mask": True,
+        },
+        {
+            "attempt_index": 2,
+            "attempt_strategy": "invert_subject",
+            "requested_prompt": direct_prompt,
+            "effective_prompt": "subject",
+            "revert_mask": True,
+        },
+    ]
+
+
+def _normalize_fal_prompt_label(prompt: str, *, region: str) -> str:
+    """Normalize free-form region descriptions into short English prompt labels."""
+
+    cleaned = " ".join(prompt.strip().lower().replace("_", " ").split())
+    if not cleaned:
+        return _default_fal_prompt_for_region(region)
+
+    if any(keyword in cleaned for keyword in ("under eye", "under-eye", "dark eye", "黑眼圈", "眼下")):
+        return "eye"
+    if any(keyword in cleaned for keyword in ("face skin", "skin", "肤色", "皮肤", "脸", "面部")):
+        return "face"
+    if any(keyword in cleaned for keyword in ("hair", "发丝", "头发")):
+        return "hair"
+    if any(keyword in cleaned for keyword in ("teeth", "牙")):
+        return "teeth"
+    if any(keyword in cleaned for keyword in ("eyes", "eye", "虹膜", "眼睛")):
+        return "eyes"
+    if any(keyword in cleaned for keyword in ("white dress", "wedding dress", "婚纱", "白裙")):
+        return "dress"
+    if any(keyword in cleaned for keyword in ("dress", "clothing", "clothes", "衣服", "服装")):
+        return "dress"
+    if any(keyword in cleaned for keyword in ("upper body", "上半身", "half body", "person", "人物", "人像")):
+        return "person"
+    if any(keyword in cleaned for keyword in ("main subject", "主体")):
+        return "subject"
+    if any(keyword in cleaned for keyword in ("background foliage", "foliage", "greenery", "绿植", "树林", "草地", "树", "树叶", "草")):
+        return "trees"
+    if any(keyword in cleaned for keyword in ("background haze", "灰雾", "雾")):
+        return "haze"
+    if any(keyword in cleaned for keyword in ("background", "背景")):
+        return "background"
+    if any(keyword in cleaned for keyword in ("water spray", "droplet", "water", "spray", "泡泡", "水花")):
+        return "water"
+    if any(keyword in cleaned for keyword in ("bottle", "瓶子")):
+        return "bottle"
+    if any(keyword in cleaned for keyword in ("blemish", "痘", "瑕疵")):
+        return "blemish"
+    if any(keyword in cleaned for keyword in ("passersby", "路人")):
+        return "people"
+    if any(keyword in cleaned for keyword in ("object", "clutter", "杂物")):
+        return "object"
+    if any(keyword in cleaned for keyword in ("detail", "细节")):
+        return "subject"
+    if cleaned in {"person", "subject", "body"}:
+        return cleaned
+    return cleaned
+
+
+def normalize_segmentation_prompt_label(prompt: str, *, region: str = "main_subject") -> str:
+    """Public helper to normalize a segmentation prompt into a short English label."""
+
+    return _normalize_fal_prompt_label(prompt, region=region)
 
 
 def _default_semantic_type_for_prompt(region: str, prompt: str) -> bool:
@@ -513,7 +627,7 @@ def generate_fal_sam3_mask(
     if not original.exists():
         raise FileNotFoundError(f"Image not found: {original}")
 
-    cleaned_prompt = prompt.strip()
+    cleaned_prompt = _normalize_fal_prompt_label(prompt, region="main_subject")
     if not cleaned_prompt:
         raise FalImageSegError("fal segmentation requires a non-empty prompt.")
 
@@ -555,7 +669,7 @@ def generate_fal_sam3_mask(
             _as_bool(blur_mask, default=False),
             _as_bool(revert_mask, default=False),
             int(expand_mask or 0),
-            negative_prompt.strip() if negative_prompt else None,
+            None,
             _as_bool(use_grounding_dino, default=False) if use_grounding_dino is not None else None,
         )
 
@@ -580,7 +694,7 @@ def generate_fal_sam3_mask(
             api_chain=("fal_client.upload", model_name),
             remote_mask_url=remote_mask_url,
             prompt=cleaned_prompt,
-            negative_prompt=negative_prompt.strip() if negative_prompt else None,
+            negative_prompt=None,
             raw_response=response if isinstance(response, dict) else None,
         )
     except FalImageSegError:
@@ -654,7 +768,7 @@ def _ensure_fal_region_mask(
 ) -> SegmentationResult:
     """Resolve a supported region into a provider result via fal SAM 3."""
 
-    effective_prompt = (prompt or _default_fal_prompt_for_region(region)).strip()
+    effective_prompt = _normalize_fal_prompt_label(prompt or _default_fal_prompt_for_region(region), region=region)
     resolved_semantic_type = (
         semantic_type if semantic_type is not None else _default_semantic_type_for_prompt(region, effective_prompt)
     )
@@ -666,7 +780,7 @@ def _ensure_fal_region_mask(
     result = generate_fal_sam3_mask(
         image_path,
         prompt=effective_prompt,
-        negative_prompt=negative_prompt,
+        negative_prompt=None,
         output_dir=output_dir,
         semantic_type=resolved_semantic_type,
         fill_holes=fill_holes,
@@ -684,6 +798,75 @@ def _ensure_fal_region_mask(
         semantic_type=resolved_semantic_type,
         requested_provider="fal_sam3",
     )
+
+
+def _ensure_fal_region_mask_with_background_retries(
+    image_path: str,
+    region: str,
+    *,
+    output_dir: str | None = None,
+    prompt: str | None = None,
+    negative_prompt: str | None = None,
+    semantic_type: bool | None = None,
+    fill_holes: bool | str | None = True,
+    expand_mask: int | None = 0,
+    blur_mask: bool | str | None = False,
+    use_grounding_dino: bool | str | None = None,
+    revert_mask: bool | str | None = None,
+    start_timeout_seconds: float | None = None,
+    client_timeout_seconds: float | None = None,
+) -> SegmentationResult:
+    """Retry semantic background segmentation from inverse foreground angles."""
+
+    attempts: list[dict[str, Any]] = []
+    last_error: Exception | None = None
+    for attempt in _background_retry_attempts(region, prompt):
+        try:
+            result = _ensure_fal_region_mask(
+                image_path,
+                region,
+                output_dir=output_dir,
+                prompt=attempt["effective_prompt"],
+                negative_prompt=negative_prompt,
+                semantic_type=semantic_type,
+                fill_holes=fill_holes,
+                expand_mask=expand_mask,
+                blur_mask=blur_mask,
+                use_grounding_dino=use_grounding_dino,
+                revert_mask=attempt["revert_mask"],
+                start_timeout_seconds=start_timeout_seconds,
+                client_timeout_seconds=client_timeout_seconds,
+            )
+            attempt_payload = {
+                **attempt,
+                "ok": True,
+            }
+            attempts.append(attempt_payload)
+            return replace(
+                result,
+                fallback_used=attempt["attempt_index"] > 0,
+                attempt_index=attempt["attempt_index"],
+                attempt_strategy=attempt["attempt_strategy"],
+                requested_prompt=attempt["requested_prompt"],
+                effective_prompt=attempt["effective_prompt"],
+                revert_mask=attempt["revert_mask"],
+                attempts=tuple(attempts),
+            )
+        except SegmentationProviderError as error:
+            last_error = error
+            attempts.append(
+                {
+                    **attempt,
+                    "ok": False,
+                    "error": str(error),
+                }
+            )
+            if not is_recoverable_empty_segmentation_error(error):
+                break
+
+    if isinstance(last_error, Exception):
+        raise FalImageSegAttemptsError(str(last_error), attempts=attempts) from last_error
+    raise FalImageSegAttemptsError("fal segmentation background retry did not produce a usable mask.", attempts=attempts)
 
 
 def resolve_region_mask(
@@ -711,8 +894,8 @@ def resolve_region_mask(
 
     try:
         if active_provider == "fal_sam3":
-            return replace(
-                _ensure_fal_region_mask(
+            fal_result = (
+                _ensure_fal_region_mask_with_background_retries(
                     image_path,
                     region,
                     output_dir=output_dir,
@@ -726,9 +909,28 @@ def resolve_region_mask(
                     revert_mask=revert_mask,
                     start_timeout_seconds=start_timeout_seconds,
                     client_timeout_seconds=client_timeout_seconds,
-                ),
+                )
+                if _is_background_retry_candidate(region, prompt)
+                else _ensure_fal_region_mask(
+                    image_path,
+                    region,
+                    output_dir=output_dir,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    semantic_type=semantic_type,
+                    fill_holes=fill_holes,
+                    expand_mask=expand_mask,
+                    blur_mask=blur_mask,
+                    use_grounding_dino=use_grounding_dino,
+                    revert_mask=revert_mask,
+                    start_timeout_seconds=start_timeout_seconds,
+                    client_timeout_seconds=client_timeout_seconds,
+                )
+            )
+            return replace(
+                fal_result,
                 requested_provider=active_provider,
-                fallback_used=False,
+                fallback_used=fal_result.fallback_used,
             )
         return replace(
             _ensure_aliyun_region_mask(
@@ -845,5 +1047,7 @@ __all__ = [
     "ensure_region_mask",
     "generate_fal_sam3_mask",
     "generate_realtime_subject_mask",
+    "is_recoverable_empty_segmentation_error",
+    "normalize_segmentation_prompt_label",
     "resolve_region_mask",
 ]

@@ -41,6 +41,7 @@ class EditRequest(BaseModel):
     thread_id: str | None = None
     instruction: str | None = None
     auto_mode: bool = False
+    planner_thinking_mode: bool = False
     input_asset_ids: list[str] = Field(default_factory=list)
     input_image_paths: list[str] = Field(default_factory=list)
 
@@ -55,6 +56,7 @@ class JobSummaryResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     approval_required: bool = False
+    request_text: str | None = None
     current_stage: str | None = None
     current_message: str | None = None
     error: str | None = None
@@ -83,6 +85,7 @@ class EditResponse(BaseModel):
     eval_report: dict[str, Any] | None = None
     execution_trace: list[dict[str, Any]] = Field(default_factory=list)
     segmentation_trace: list[dict[str, Any]] = Field(default_factory=list)
+    fallback_trace: list[dict[str, Any]] = Field(default_factory=list)
     round_outputs: dict[str, AssetResponse | None] = Field(default_factory=dict)
     round_plans: dict[str, Any] = Field(default_factory=dict)
     round_eval_reports: dict[str, Any] = Field(default_factory=dict)
@@ -103,6 +106,7 @@ class JobDetailResponse(BaseModel):
     eval_report: dict[str, Any] | None = None
     execution_trace: list[dict[str, Any]] = Field(default_factory=list)
     segmentation_trace: list[dict[str, Any]] = Field(default_factory=list)
+    fallback_trace: list[dict[str, Any]] = Field(default_factory=list)
     round_outputs: dict[str, AssetResponse | None] = Field(default_factory=dict)
     round_plans: dict[str, Any] = Field(default_factory=dict)
     round_eval_reports: dict[str, Any] = Field(default_factory=dict)

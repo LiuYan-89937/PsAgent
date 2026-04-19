@@ -16,6 +16,11 @@ from app.services.model_context import (
     compact_preferences_for_model,
     compact_request_intent_for_model,
 )
+from app.services.planner_param_codec import (
+    decode_planner_operation_params,
+    parse_repaired_tool_arguments,
+    planner_param_spec,
+)
 from app.services.qwen_model import DEFAULT_TEXT_MODEL, call_qwen_for_tool_message, qwen_model_available
 from app.tools.packages import PackageRegistry, build_default_package_registry
 from app.tools.packages.base import WHOLE_IMAGE_REGION
@@ -87,6 +92,16 @@ def _tool_candidate_text(package) -> str:
         " ".join(sorted(_generated_aliases(package.name))),
     ]
     return " ".join(part for part in fields if part)
+
+
+def should_attach_planner_image(
+    *,
+    current_step: int,
+    latest_result: dict[str, Any] | None,
+) -> bool:
+    """Only attach the current image on the first planner step."""
+
+    return current_step <= 1 or latest_result is None
 
 
 def resolve_planner_tool_name(
@@ -166,7 +181,11 @@ def _package_tool_parameters(package) -> dict[str, Any]:
     """Build tool parameters for a package tool."""
 
     params_schema = package.get_params_schema()
-    properties = dict(params_schema.get("properties", {}))
+    original_properties = dict(params_schema.get("properties", {}))
+    properties = {
+        key: planner_param_spec(value) if isinstance(value, dict) else value
+        for key, value in original_properties.items()
+    }
     properties["region"] = _build_region_schema()
     required = list(params_schema.get("required", []))
     return {
@@ -238,7 +257,9 @@ def _build_round_step_payload(
             "如果当前图片还需要继续调整，就调用下一个最合适的工具。",
             "如果当前轮目标已经完成，就调用 finish_round。",
             "没有 mask 参数时默认按全图处理。",
-            "只有需要局部处理时才补齐 mask_provider、mask_prompt、mask_negative_prompt、mask_semantic_type。",
+            "只有需要局部处理时才补齐 mask_provider、mask_prompt、mask_semantic_type。",
+            "mask_prompt 必须是单个英文词汇，只写一个可见主体或物体，不要写中文，不要写句子。",
+            "所有数值参数只允许填写 0-100 整数，不要输出小数；后端会再映射回真实范围。",
             "局部操作时 region 作为区域标签，可填写动态区域标签；不需要局部时 region 可以省略。",
         ],
     }
@@ -278,6 +299,7 @@ def call_planner_tool_turn(
     current_step: int,
     round_operations: list[dict[str, Any]],
     latest_result: dict[str, Any] | None,
+    planner_thinking_mode: bool = False,
     previous_plan: dict[str, Any] | None = None,
     previous_execution_trace: list[dict[str, Any]] | None = None,
     previous_eval_report: dict[str, Any] | None = None,
@@ -286,6 +308,9 @@ def call_planner_tool_turn(
     """Request the next realtime planner tool call for the current round."""
 
     tools = build_planner_tools(registry)
+    image_paths = [current_image_path] if should_attach_planner_image(current_step=current_step, latest_result=latest_result) else None
+    tool_choice = "auto" if planner_thinking_mode else "required"
+    enable_thinking = True if planner_thinking_mode else False
     return call_qwen_for_tool_message(
         prompt_name="planner.txt",
         user_payload=_build_round_step_payload(
@@ -304,9 +329,10 @@ def call_planner_tool_turn(
         model_env_name="DASHSCOPE_PLANNER_MODEL",
         default_model=DEFAULT_TEXT_MODEL,
         tools=tools,
-        image_paths=[current_image_path],
+        image_paths=image_paths,
         temperature=0.1,
-        tool_choice="required",
+        tool_choice=tool_choice,
+        enable_thinking=enable_thinking,
     )
 
 
@@ -330,8 +356,8 @@ def extract_single_tool_call(message: dict[str, Any]) -> tuple[str, dict[str, An
     if not isinstance(raw_arguments, str):
         raise RuntimeError(f"Planner returned invalid tool arguments for {tool_name}.")
     try:
-        parsed_arguments = json.loads(raw_arguments)
-    except json.JSONDecodeError as exc:
+        parsed_arguments = parse_repaired_tool_arguments(raw_arguments)
+    except (json.JSONDecodeError, RuntimeError) as exc:
         raise RuntimeError(f"Planner returned invalid JSON arguments for {tool_name}: {raw_arguments}") from exc
 
     if not isinstance(parsed_arguments, dict):
@@ -342,9 +368,7 @@ def extract_single_tool_call(message: dict[str, Any]) -> tuple[str, dict[str, An
 def build_operation_from_tool_call(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Convert a package tool call into a runtime operation dict."""
 
-    region = str(arguments.get("region") or WHOLE_IMAGE_REGION)
-    params = {key: value for key, value in arguments.items() if key != "region"}
-    strength = arguments.get("strength")
+    region, params, strength = decode_planner_operation_params(tool_name, arguments)
     return {
         "op": tool_name,
         "region": region,

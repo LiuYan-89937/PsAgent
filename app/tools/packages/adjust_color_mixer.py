@@ -10,36 +10,42 @@ from app.tools.packages.base import OperationContext, PackageParamsModel, Packag
 from pydantic import Field
 
 
+def _channel_field(description: str) -> Any:
+    """Return a standard Color Mixer channel field."""
+
+    return Field(0.0, ge=-1.0, le=1.0, description=description)
+
+
 class AdjustColorMixerParams(PackageParamsModel):
     """Planner-fillable params for Color Mixer / HSL style adjustment."""
 
-    red_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    red_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    red_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    orange_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    orange_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    orange_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    yellow_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    yellow_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    yellow_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    green_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    green_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    green_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    aqua_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    aqua_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    aqua_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    blue_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    blue_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    blue_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    purple_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    purple_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    purple_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    magenta_hue: float = Field(0.0, ge=-1.0, le=1.0)
-    magenta_saturation: float = Field(0.0, ge=-1.0, le=1.0)
-    magenta_luminance: float = Field(0.0, ge=-1.0, le=1.0)
-    saturation_protection: float = Field(0.3, ge=0.0, le=0.85)
-    luminance_protection: float = Field(0.22, ge=0.0, le=0.85)
-    feather_radius: float = Field(18.0, ge=0.0, le=64.0)
+    red_hue: float = _channel_field("红色色相偏移。")
+    red_saturation: float = _channel_field("红色饱和度偏移。")
+    red_luminance: float = _channel_field("红色亮度偏移。")
+    orange_hue: float = _channel_field("橙色色相偏移。")
+    orange_saturation: float = _channel_field("橙色饱和度偏移。")
+    orange_luminance: float = _channel_field("橙色亮度偏移。")
+    yellow_hue: float = _channel_field("黄色色相偏移。")
+    yellow_saturation: float = _channel_field("黄色饱和度偏移。")
+    yellow_luminance: float = _channel_field("黄色亮度偏移。")
+    green_hue: float = _channel_field("绿色色相偏移。")
+    green_saturation: float = _channel_field("绿色饱和度偏移。")
+    green_luminance: float = _channel_field("绿色亮度偏移。")
+    aqua_hue: float = _channel_field("青色色相偏移。")
+    aqua_saturation: float = _channel_field("青色饱和度偏移。")
+    aqua_luminance: float = _channel_field("青色亮度偏移。")
+    blue_hue: float = _channel_field("蓝色色相偏移。")
+    blue_saturation: float = _channel_field("蓝色饱和度偏移。")
+    blue_luminance: float = _channel_field("蓝色亮度偏移。")
+    purple_hue: float = _channel_field("紫色色相偏移。")
+    purple_saturation: float = _channel_field("紫色饱和度偏移。")
+    purple_luminance: float = _channel_field("紫色亮度偏移。")
+    magenta_hue: float = _channel_field("洋红色色相偏移。")
+    magenta_saturation: float = _channel_field("洋红色饱和度偏移。")
+    magenta_luminance: float = _channel_field("洋红色亮度偏移。")
+    saturation_protection: float = Field(0.3, ge=0.0, le=0.85, description="高饱和保护。")
+    luminance_protection: float = Field(0.22, ge=0.0, le=0.85, description="亮度保护。")
+    feather_radius: float = Field(18.0, ge=0.0, le=64.0, description="局部羽化半径。")
 
 
 class AdjustColorMixerPackage(ToolPackage):

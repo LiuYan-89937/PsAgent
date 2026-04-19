@@ -8,6 +8,7 @@ from typing import Any
 
 from langgraph.config import get_stream_writer
 
+from app.graph.fallbacks import append_fallback_trace
 from app.graph.state import ApprovalPayload, EditOperation, EditPlan, EditState, ExecutionTraceItem, SegmentationTraceItem
 from app.services.planner_tool_model import (
     FinishRoundParams,
@@ -18,8 +19,9 @@ from app.services.planner_tool_model import (
     resolve_planner_tool_name,
 )
 from app.tools.packages import OperationContext, build_default_package_registry
+from app.tools.packages.base import WHOLE_IMAGE_REGION, strip_mask_params
 from app.tools.packages.macros import expand_macro_operation, is_macro_tool, operations_require_hybrid
-from app.tools.segmentation_tools import resolve_region_mask
+from app.tools.segmentation_tools import is_recoverable_empty_segmentation_error, resolve_region_mask
 
 
 def _safe_stream_writer():
@@ -29,6 +31,12 @@ def _safe_stream_writer():
         return get_stream_writer()
     except RuntimeError:
         return lambda *_args, **_kwargs: None
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    """Return whether the text contains any keyword."""
+
+    return any(keyword in text for keyword in keywords)
 
 
 def _build_operation_context(state: EditState, image_path: str, mask_cache: dict[str, str]) -> OperationContext:
@@ -110,6 +118,7 @@ def _execute_single_tool_call(
     round_execution_trace: list[dict[str, Any]],
     segmentation_trace: list[dict[str, Any]],
     round_segmentation_trace: list[dict[str, Any]],
+    fallback_trace: list[dict[str, Any]],
     candidate_outputs: list[str],
     mask_cache: dict[str, str],
 ) -> tuple[str, dict[str, Any] | None]:
@@ -146,6 +155,7 @@ def _execute_single_tool_call(
                 round_execution_trace=round_execution_trace,
                 segmentation_trace=segmentation_trace,
                 round_segmentation_trace=round_segmentation_trace,
+                fallback_trace=fallback_trace,
                 candidate_outputs=candidate_outputs,
                 mask_cache=mask_cache,
             )
@@ -196,6 +206,7 @@ def _execute_single_tool_call(
         if current_mask_path is None:
             requested_provider = str(mask_options.get("provider") or "auto")
             requested_target = str(mask_options.get("prompt") or region)
+            segmentation_result = None
             writer(
                 {
                     "event": "segmentation_started",
@@ -232,46 +243,132 @@ def _execute_single_tool_call(
                         "error": str(error),
                     },
                 )
-                raise RuntimeError(f"Planner tool {operation['op']} segmentation failed: {error}") from error
+                if package.spec.mask_policy != "required" and is_recoverable_empty_segmentation_error(error):
+                    segmentation_item = SegmentationTraceItem(
+                        index=len(segmentation_trace),
+                        stage=round_key,
+                        source_op=operation["op"],
+                        region=region,
+                        provider=requested_provider,
+                        requested_provider=requested_provider,
+                        target_label=requested_target,
+                        prompt=str(mask_options.get("prompt") or "") or None,
+                        negative_prompt=str(mask_options.get("negative_prompt") or "") or None,
+                        semantic_type=bool(mask_options.get("semantic_type")) if "semantic_type" in mask_options else None,
+                        ok=False,
+                        fallback_used=True,
+                        error=str(error),
+                        mask_path=None,
+                        api_chain=[],
+                        attempt_index=getattr(error, "attempts", [{}])[-1].get("attempt_index") if getattr(error, "attempts", None) else None,
+                        attempt_strategy=getattr(error, "attempts", [{}])[-1].get("attempt_strategy") if getattr(error, "attempts", None) else None,
+                        requested_prompt=getattr(error, "attempts", [{}])[-1].get("requested_prompt") if getattr(error, "attempts", None) else None,
+                        effective_prompt=getattr(error, "attempts", [{}])[-1].get("effective_prompt") if getattr(error, "attempts", None) else None,
+                        revert_mask=getattr(error, "attempts", [{}])[-1].get("revert_mask") if getattr(error, "attempts", None) else None,
+                        attempts=list(getattr(error, "attempts", []) or []),
+                    ).model_dump(mode="json")
+                    segmentation_trace.append(segmentation_item)
+                    round_segmentation_trace.append(segmentation_item)
+                    writer(
+                        {
+                            "event": "segmentation_skipped",
+                            "stage": node_name,
+                            "round": round_key,
+                            "region": region,
+                            "provider": requested_provider,
+                            "message": f"{requested_target} 未返回可用遮罩，跳过该局部步骤",
+                            "error": str(error),
+                        },
+                    )
+                    fallback_trace[:] = append_fallback_trace(
+                        fallback_trace,
+                        stage=node_name,
+                        source="segmentation_provider",
+                        location=operation["op"],
+                        strategy="skip_local_operation",
+                        message="局部分割未返回可用遮罩，已跳过该局部步骤。",
+                        error=str(error),
+                    )
+                    skipped_trace = ExecutionTraceItem(
+                        index=len(execution_trace),
+                        stage=round_key,
+                        op=operation["op"],
+                        region=region,
+                        ok=False,
+                        fallback_used=True,
+                        error="Skipped: segmentation returned no usable mask.",
+                        output_image=current_image,
+                        applied_params={"params": dict(operation.get("params") or {})},
+                        mask_path=None,
+                    ).model_dump(mode="json")
+                    execution_trace.append(skipped_trace)
+                    round_execution_trace.append(skipped_trace)
+                    writer(
+                        {
+                            "event": "package_skipped",
+                            "stage": node_name,
+                            "round": round_key,
+                            "op": operation["op"],
+                            "region": region,
+                            "message": f"{operation['op']} 因分割无结果被跳过",
+                            "error": str(error),
+                        },
+                    )
+                    return current_image, {
+                        "op": operation["op"],
+                        "region": region,
+                        "ok": False,
+                        "fallback_used": True,
+                        "error": "Skipped: segmentation returned no usable mask.",
+                    }
+                else:
+                    raise RuntimeError(f"Planner tool {operation['op']} segmentation failed: {error}") from error
 
-            current_mask_path = segmentation_result.binary_mask_path
-            mask_cache[mask_cache_key] = current_mask_path
-            mask_cache[region] = current_mask_path
-            segmentation_item = SegmentationTraceItem(
-                index=len(segmentation_trace),
-                stage=round_key,
-                source_op=operation["op"],
-                region=region,
-                provider=segmentation_result.provider,
-                requested_provider=segmentation_result.requested_provider or requested_provider,
-                target_label=segmentation_result.target_label or requested_target,
-                prompt=segmentation_result.prompt,
-                negative_prompt=segmentation_result.negative_prompt,
-                semantic_type=segmentation_result.semantic_type,
-                ok=True,
-                fallback_used=segmentation_result.fallback_used,
-                mask_path=current_mask_path,
-                request_id=segmentation_result.request_id,
-                api_chain=list(segmentation_result.api_chain),
-            ).model_dump(mode="json")
-            segmentation_trace.append(segmentation_item)
-            round_segmentation_trace.append(segmentation_item)
-            writer(
-                {
-                    "event": "segmentation_finished",
-                    "stage": node_name,
-                    "round": round_key,
-                    "region": region,
-                    "provider": segmentation_result.provider,
-                    "requested_provider": segmentation_result.requested_provider or requested_provider,
-                    "target_label": segmentation_item["target_label"],
-                    "prompt": segmentation_item["prompt"],
-                    "negative_prompt": segmentation_item["negative_prompt"],
-                    "fallback_used": segmentation_item["fallback_used"],
-                    "mask_path": current_mask_path,
-                    "message": f"{segmentation_item['target_label']} 的区域遮罩已生成",
-                },
-            )
+            if segmentation_result is not None:
+                current_mask_path = segmentation_result.binary_mask_path
+                mask_cache[mask_cache_key] = current_mask_path
+                mask_cache[region] = current_mask_path
+                segmentation_item = SegmentationTraceItem(
+                    index=len(segmentation_trace),
+                    stage=round_key,
+                    source_op=operation["op"],
+                    region=region,
+                    provider=segmentation_result.provider,
+                    requested_provider=segmentation_result.requested_provider or requested_provider,
+                    target_label=segmentation_result.target_label or requested_target,
+                    prompt=segmentation_result.prompt,
+                    negative_prompt=segmentation_result.negative_prompt,
+                    semantic_type=segmentation_result.semantic_type,
+                    ok=True,
+                    fallback_used=segmentation_result.fallback_used,
+                    mask_path=current_mask_path,
+                    request_id=segmentation_result.request_id,
+                    api_chain=list(segmentation_result.api_chain),
+                    attempt_index=segmentation_result.attempt_index,
+                    attempt_strategy=segmentation_result.attempt_strategy,
+                    requested_prompt=segmentation_result.requested_prompt,
+                    effective_prompt=segmentation_result.effective_prompt,
+                    revert_mask=segmentation_result.revert_mask,
+                    attempts=list(segmentation_result.attempts),
+                ).model_dump(mode="json")
+                segmentation_trace.append(segmentation_item)
+                round_segmentation_trace.append(segmentation_item)
+                writer(
+                    {
+                        "event": "segmentation_finished",
+                        "stage": node_name,
+                        "round": round_key,
+                        "region": region,
+                        "provider": segmentation_result.provider,
+                        "requested_provider": segmentation_result.requested_provider or requested_provider,
+                        "target_label": segmentation_item["target_label"],
+                        "prompt": segmentation_item["prompt"],
+                        "negative_prompt": segmentation_item["negative_prompt"],
+                        "fallback_used": segmentation_item["fallback_used"],
+                        "mask_path": current_mask_path,
+                        "message": f"{segmentation_item['target_label']} 的区域遮罩已生成",
+                    },
+                )
 
     context = _build_operation_context(state, current_image, mask_cache)
     result = package.execute(operation, context)
@@ -302,7 +399,16 @@ def _execute_single_tool_call(
                 "error": result.error,
             },
         )
-        raise RuntimeError(f"Planner tool {operation['op']} failed: {result.error or 'unknown error'}")
+        fallback_trace[:] = append_fallback_trace(
+            fallback_trace,
+            stage=node_name,
+            source="package_execute",
+            location=operation["op"],
+            strategy="keep_current_image",
+            message=f"{operation['op']} 执行失败，保留当前结果继续流程。",
+            error=result.error or "unknown error",
+        )
+        return current_image, _compact_tool_result(operation, result, segmentation_item=segmentation_item)
 
     trace_item = ExecutionTraceItem(
         index=len(execution_trace),
@@ -348,16 +454,218 @@ def _execute_single_tool_call(
     if result.output_image:
         next_image = result.output_image
         candidate_outputs.append(result.output_image)
-        mask_cache.clear()
 
     return next_image, _compact_tool_result(operation, result, segmentation_item=segmentation_item)
+
+
+def _fallback_rule_execute_round(
+    state: EditState,
+    *,
+    round_index: int,
+    fallback_trace: list[dict[str, Any]],
+    reason: str,
+) -> dict[str, Any]:
+    """Fallback to a small local rule planner when realtime tool-calling is unavailable."""
+
+    def build_rule_operations() -> list[dict[str, Any]]:
+        registry = build_default_package_registry()
+        request_intent = dict(state.get("request_intent") or {"mode": state.get("mode") or "auto"})
+        requested_packages = list(request_intent.get("requested_packages", []))
+        image_analysis = dict(state.get("image_analysis") or {})
+        issues = set(str(item) for item in image_analysis.get("issues", []))
+        request_text = str(state.get("request_text") or "")
+        constraints = {str(item) for item in request_intent.get("constraints", [])}
+        operations: list[dict[str, Any]] = []
+
+        def append_operation(op: str, *, region: str = "whole_image", params: dict[str, Any] | None = None, strength: float | None = None) -> None:
+            if any(item["op"] == op and item.get("region", "whole_image") == region for item in operations):
+                return
+            package = registry.require(op)
+            payload = {
+                "op": op,
+                "region": region,
+                "strength": strength,
+                "params": package.get_operation_params({"op": op, "region": region, "strength": strength, "params": params or {}}),
+                "constraints": [],
+            }
+            operations.append(payload)
+
+        if round_index == 1 and requested_packages:
+            for item in requested_packages[:3]:
+                op = str(item.get("op") or "")
+                if not op or registry.get(op) is None:
+                    continue
+                append_operation(
+                    op,
+                    region=str(item.get("region") or "whole_image"),
+                    params=dict(item.get("params") or {}),
+                    strength=item.get("strength"),
+                )
+
+        if not operations:
+            if "underexposed" in issues or _contains_any(request_text, ("提亮", "曝光", "逆光", "背光")):
+                append_operation("adjust_exposure", strength=0.22, params={"max_stops": 1.45})
+            if {"crushed_shadows", "clipped_highlights"} & issues or _contains_any(request_text, ("高光", "阴影", "层次")):
+                append_operation("adjust_highlights_shadows", strength=0.18, params={"tone_amount": 0.3})
+            if "flat_contrast" in issues or _contains_any(request_text, ("对比", "层次感")):
+                append_operation("adjust_contrast", strength=0.16)
+            if round_index == 1 and ("build_summer_mood" in constraints or _contains_any(request_text, ("夏日", "通透", "空气感"))):
+                append_operation("adjust_white_balance", strength=0.1)
+                append_operation("adjust_vibrance_saturation", strength=0.16)
+
+        if round_index == 2 and not operations:
+            if image_analysis.get("domain") == "portrait" or _contains_any(request_text, ("人像", "肤色", "脸", "皮肤")):
+                append_operation("point_color", params={"target_color": "skin", "strength": 0.16, "luminance_shift": 0.08})
+                append_operation("skin_texture_reduce", strength=0.1)
+            elif _contains_any(request_text, ("质感", "通透", "清晰")):
+                append_operation("adjust_clarity", strength=0.08)
+                append_operation("adjust_texture", strength=0.08)
+
+        return operations[:3]
+
+    stage_name = f"plan_execute_round_{round_index}"
+    round_key = f"round_{round_index}"
+    traced = append_fallback_trace(
+        fallback_trace,
+        stage=stage_name,
+        source="planner_tool_model",
+        location="round_execution",
+        strategy="rule_plan_execution",
+        message="实时规划不可用，改用规则规划并继续执行。",
+        error=reason,
+    )
+    input_images = state.get("input_images") or []
+    if not input_images:
+        raise ValueError("No input image available.")
+
+    current_image = str(state.get("selected_output") or input_images[0]) if round_index > 1 else input_images[0]
+    candidate_outputs = list(state.get("candidate_outputs") or [])
+    execution_trace = list(state.get("execution_trace") or [])
+    segmentation_trace = list(state.get("segmentation_trace") or [])
+    round_execution_trace: list[dict[str, Any]] = []
+    round_segmentation_trace: list[dict[str, Any]] = []
+    round_outputs = dict(state.get("round_outputs") or {})
+    round_plans = dict(state.get("round_plans") or {})
+    round_execution_traces = dict(state.get("round_execution_traces") or {})
+    round_segmentation_traces = dict(state.get("round_segmentation_traces") or {})
+    mask_cache: dict[str, str] = {}
+    writer = _safe_stream_writer()
+    round_operations = build_rule_operations()
+    latest_result: dict[str, Any] | None = None
+
+    writer(
+        {
+            "event": "planner_started",
+            "stage": stage_name,
+            "round": round_key,
+            "message": f"实时规划不可用，正在使用规则规划执行 {round_key}",
+        }
+    )
+    for operation in round_operations:
+        current_image, latest_result = _execute_single_tool_call(
+            state=state,
+            node_name=stage_name,
+            round_key=round_key,
+            current_image=current_image,
+            operation=operation,
+            execution_trace=execution_trace,
+            round_execution_trace=round_execution_trace,
+            segmentation_trace=segmentation_trace,
+            round_segmentation_trace=round_segmentation_trace,
+            fallback_trace=traced,
+            candidate_outputs=candidate_outputs,
+            mask_cache=mask_cache,
+        )
+
+    return _complete_current_round(
+        state=state,
+        round_index=round_index,
+        current_image=current_image,
+        candidate_outputs=candidate_outputs,
+        execution_trace=execution_trace,
+        segmentation_trace=segmentation_trace,
+        round_outputs=round_outputs,
+        round_plans=round_plans,
+        round_execution_traces=round_execution_traces,
+        round_segmentation_traces=round_segmentation_traces,
+        round_operations=round_operations,
+        round_execution_trace=round_execution_trace,
+        round_segmentation_trace=round_segmentation_trace,
+        fallback_trace=traced,
+        planner_summary="实时规划不可用，已使用规则规划完成本轮。",
+    )
+
+
+def _complete_current_round(
+    *,
+    state: EditState,
+    round_index: int,
+    current_image: str,
+    candidate_outputs: list[str],
+    execution_trace: list[dict[str, Any]],
+    segmentation_trace: list[dict[str, Any]],
+    round_outputs: dict[str, Any],
+    round_plans: dict[str, Any],
+    round_execution_traces: dict[str, Any],
+    round_segmentation_traces: dict[str, Any],
+    round_operations: list[dict[str, Any]],
+    round_execution_trace: list[dict[str, Any]],
+    round_segmentation_trace: list[dict[str, Any]],
+    fallback_trace: list[dict[str, Any]],
+    planner_summary: str,
+) -> dict[str, Any]:
+    """Build the common return payload for a completed round."""
+
+    round_key = f"round_{round_index}"
+    request_intent = dict(state.get("request_intent") or {"mode": state.get("mode") or "auto"})
+    image_analysis = dict(state.get("image_analysis") or {})
+    plan = EditPlan(
+        mode=str(state.get("mode") or request_intent.get("mode") or "auto"),
+        domain=str(image_analysis.get("domain") or "general"),
+        executor=_choose_executor(round_operations),
+        preserve=list(request_intent.get("constraints", [])),
+        operations=[EditOperation.model_validate({**item, "priority": index}) for index, item in enumerate(round_operations)],
+        should_write_memory=False,
+        memory_candidates=[],
+        needs_confirmation=False,
+    )
+
+    round_plan_payload = plan.model_dump(mode="json")
+    round_plan_payload["planner_summary"] = planner_summary
+    round_plans[round_key] = round_plan_payload
+    round_outputs[round_key] = current_image
+    round_execution_traces[round_key] = round_execution_trace
+    round_segmentation_traces[round_key] = round_segmentation_trace
+
+    return {
+        "current_round": round_index,
+        "selected_output": current_image,
+        "candidate_outputs": candidate_outputs,
+        "execution_trace": execution_trace,
+        "segmentation_trace": segmentation_trace,
+        "fallback_trace": fallback_trace,
+        "round_outputs": round_outputs,
+        "edit_plan": plan.model_dump(mode="json"),
+        "round_plans": round_plans,
+        "round_execution_traces": round_execution_traces,
+        "round_segmentation_traces": round_segmentation_traces,
+        "memory_write_candidates": [],
+        "approval_required": bool(state.get("approval_required")),
+        "approval_payload": state.get("approval_payload"),
+        "masks": {},
+    }
 
 
 def _run_round(state: EditState, *, round_index: int) -> dict[str, Any]:
     """Run one realtime planner round with per-step tool execution."""
 
     if not planner_tool_model_available():
-        raise RuntimeError("Planner tool-calling model is unavailable.")
+        return _fallback_rule_execute_round(
+            state,
+            round_index=round_index,
+            fallback_trace=list(state.get("fallback_trace") or []),
+            reason="Planner tool-calling model is unavailable.",
+        )
 
     input_images = state.get("input_images") or []
     if not input_images:
@@ -372,17 +680,20 @@ def _run_round(state: EditState, *, round_index: int) -> dict[str, Any]:
     previous_plan = (state.get("round_plans") or {}).get("round_1") if round_index == 2 else None
     previous_execution_trace = (state.get("round_execution_traces") or {}).get("round_1") if round_index == 2 else None
     previous_eval_report = (state.get("round_eval_reports") or {}).get("round_1") if round_index == 2 else None
+    planner_thinking_mode = bool(state.get("planner_thinking_mode"))
 
     current_image = str(state.get("selected_output") or input_images[0]) if round_index > 1 else input_images[0]
     candidate_outputs = list(state.get("candidate_outputs") or [])
     execution_trace = list(state.get("execution_trace") or [])
     segmentation_trace = list(state.get("segmentation_trace") or [])
+    fallback_trace = list(state.get("fallback_trace") or [])
     round_execution_trace: list[dict[str, Any]] = []
     round_segmentation_trace: list[dict[str, Any]] = []
     round_outputs = dict(state.get("round_outputs") or {})
     round_plans = dict(state.get("round_plans") or {})
     round_execution_traces = dict(state.get("round_execution_traces") or {})
     round_segmentation_traces = dict(state.get("round_segmentation_traces") or {})
+    mask_cache: dict[str, str] = {}
     writer = _safe_stream_writer()
 
     writer(
@@ -407,54 +718,60 @@ def _run_round(state: EditState, *, round_index: int) -> dict[str, Any]:
 
     step = 1
     while True:
-        message = call_planner_tool_turn(
-            request_text=request_text,
-            request_intent=request_intent,
-            image_analysis=image_analysis,
-            retrieved_prefs=retrieved_prefs,
-            current_image_path=current_image,
-            round_name=round_key,
-            current_step=step,
-            round_operations=round_operations,
-            latest_result=latest_result,
-            previous_plan=previous_plan,
-            previous_execution_trace=previous_execution_trace,
-            previous_eval_report=previous_eval_report,
-        )
-        tool_name, arguments = extract_single_tool_call(message)
+        try:
+            message = call_planner_tool_turn(
+                request_text=request_text,
+                request_intent=request_intent,
+                image_analysis=image_analysis,
+                retrieved_prefs=retrieved_prefs,
+                current_image_path=current_image,
+                round_name=round_key,
+                current_step=step,
+                round_operations=round_operations,
+                latest_result=latest_result,
+                planner_thinking_mode=planner_thinking_mode,
+                previous_plan=previous_plan,
+                previous_execution_trace=previous_execution_trace,
+                previous_eval_report=previous_eval_report,
+            )
+            tool_name, arguments = extract_single_tool_call(message)
+        except RuntimeError as error:
+            if round_operations:
+                fallback_trace = append_fallback_trace(
+                    fallback_trace,
+                    stage=node_name,
+                    source="planner_tool_model",
+                    location="round_execution",
+                    strategy="finish_current_round",
+                    message="实时规划中断，保留当前轮已完成结果。",
+                    error=str(error),
+                )
+                return _complete_current_round(
+                    state=state,
+                    round_index=round_index,
+                    current_image=current_image,
+                    candidate_outputs=candidate_outputs,
+                    execution_trace=execution_trace,
+                    segmentation_trace=segmentation_trace,
+                    round_outputs=round_outputs,
+                    round_plans=round_plans,
+                    round_execution_traces=round_execution_traces,
+                    round_segmentation_traces=round_segmentation_traces,
+                    round_operations=round_operations,
+                    round_execution_trace=round_execution_trace,
+                    round_segmentation_trace=round_segmentation_trace,
+                    fallback_trace=fallback_trace,
+                    planner_summary="实时规划中断，已保留当前轮结果。",
+                )
+            return _fallback_rule_execute_round(
+                state,
+                round_index=round_index,
+                fallback_trace=fallback_trace,
+                reason=str(error),
+            )
 
         if tool_name == "finish_round":
             finish_payload = FinishRoundParams.model_validate(arguments)
-
-            plan = EditPlan(
-                mode=str(state.get("mode") or request_intent.get("mode") or "auto"),
-                domain=str(image_analysis.get("domain") or "general"),
-                executor=_choose_executor(round_operations),
-                preserve=list(request_intent.get("constraints", [])),
-                operations=[EditOperation.model_validate({**item, "priority": index}) for index, item in enumerate(round_operations)],
-                should_write_memory=finish_payload.should_write_memory,
-                memory_candidates=list(finish_payload.memory_candidates),
-                needs_confirmation=finish_payload.needs_confirmation,
-            )
-
-            round_plan_payload = plan.model_dump(mode="json")
-            round_plan_payload["planner_summary"] = finish_payload.summary
-            round_plans[round_key] = round_plan_payload
-            round_outputs[round_key] = current_image
-            round_execution_traces[round_key] = round_execution_trace
-            round_segmentation_traces[round_key] = round_segmentation_trace
-
-            approval_required = bool(finish_payload.needs_confirmation)
-            approval_payload = (
-                ApprovalPayload(
-                    reason="planner_requested_confirmation",
-                    summary=finish_payload.summary,
-                    suggested_action="请人工确认当前轮结果是否可接受。",
-                    metadata={"round": round_key},
-                ).model_dump(mode="json")
-                if approval_required
-                else state.get("approval_payload")
-            )
 
             writer(
                 {
@@ -473,23 +790,36 @@ def _run_round(state: EditState, *, round_index: int) -> dict[str, Any]:
                     "message": f"{round_key} 执行完成",
                 },
             )
-
-            return {
-                "current_round": round_index,
-                "selected_output": current_image,
-                "candidate_outputs": candidate_outputs,
-                "execution_trace": execution_trace,
-                "segmentation_trace": segmentation_trace,
-                "round_outputs": round_outputs,
-                "edit_plan": plan.model_dump(mode="json"),
-                "round_plans": round_plans,
-                "round_execution_traces": round_execution_traces,
-                "round_segmentation_traces": round_segmentation_traces,
-                "memory_write_candidates": list(finish_payload.memory_candidates) if finish_payload.should_write_memory else [],
-                "approval_required": approval_required,
-                "approval_payload": approval_payload,
-                "masks": {},
-            }
+            completed = _complete_current_round(
+                state=state,
+                round_index=round_index,
+                current_image=current_image,
+                candidate_outputs=candidate_outputs,
+                execution_trace=execution_trace,
+                segmentation_trace=segmentation_trace,
+                round_outputs=round_outputs,
+                round_plans=round_plans,
+                round_execution_traces=round_execution_traces,
+                round_segmentation_traces=round_segmentation_traces,
+                round_operations=round_operations,
+                round_execution_trace=round_execution_trace,
+                round_segmentation_trace=round_segmentation_trace,
+                fallback_trace=fallback_trace,
+                planner_summary=finish_payload.summary,
+            )
+            completed["memory_write_candidates"] = list(finish_payload.memory_candidates) if finish_payload.should_write_memory else []
+            completed["approval_required"] = bool(finish_payload.needs_confirmation)
+            completed["approval_payload"] = (
+                ApprovalPayload(
+                    reason="planner_requested_confirmation",
+                    summary=finish_payload.summary,
+                    suggested_action="请人工确认当前轮结果是否可接受。",
+                    metadata={"round": round_key},
+                ).model_dump(mode="json")
+                if finish_payload.needs_confirmation
+                else state.get("approval_payload")
+            )
+            return completed
 
         resolved_tool_name, resolution = resolve_planner_tool_name(tool_name, arguments)
         if resolved_tool_name != tool_name:
@@ -518,8 +848,9 @@ def _run_round(state: EditState, *, round_index: int) -> dict[str, Any]:
             round_execution_trace=round_execution_trace,
             segmentation_trace=segmentation_trace,
             round_segmentation_trace=round_segmentation_trace,
+            fallback_trace=fallback_trace,
             candidate_outputs=candidate_outputs,
-            mask_cache={},
+            mask_cache=mask_cache,
         )
         round_operations.append(operation)
         step += 1

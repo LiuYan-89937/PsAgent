@@ -21,6 +21,8 @@ class GraphInputState(TypedDict, total=False):
     thread_id: str
     input_images: list[str]
     request_text: str
+    mode: str
+    planner_thinking_mode: bool
     messages: list[Any]
 
 
@@ -33,6 +35,7 @@ class GraphOutputState(TypedDict, total=False):
     eval_report: dict[str, Any]
     execution_trace: list[dict[str, Any]]
     segmentation_trace: list[dict[str, Any]]
+    fallback_trace: list[dict[str, Any]]
     round_outputs: dict[str, Any]
     round_plans: dict[str, Any]
     round_eval_reports: dict[str, Any]
@@ -151,6 +154,25 @@ class SegmentationTraceItem(BaseModel):
     mask_path: str | None = None
     request_id: str | None = None
     api_chain: list[str] = Field(default_factory=list)
+    attempt_index: int | None = None
+    attempt_strategy: str | None = None
+    requested_prompt: str | None = None
+    effective_prompt: str | None = None
+    revert_mask: bool | None = None
+    attempts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FallbackTraceItem(BaseModel):
+    """Normalized trace item for a non-fatal fallback decision."""
+
+    index: int | None = None
+    stage: str | None = None
+    source: str | None = None
+    location: str | None = None
+    strategy: str | None = None
+    message: str = ""
+    error: str | None = None
+    fallback_used: bool = True
 
 
 class MemoryWriteCandidate(BaseModel):
@@ -246,46 +268,126 @@ class PreferenceMemory(BaseModel):
     last_updated_at: datetime
 
 
-class EditState(TypedDict, total=False):
-    """LangGraph state for an edit thread."""
+class RequestContextState(TypedDict, total=False):
+    """Request-scoped inputs and normalized intent."""
 
-    # messages: 对话消息历史
-    # user_id/thread_id: 用户与线程标识
-    # input_images: 当前输入图片
     messages: Annotated[list, add_messages]
     user_id: str
     thread_id: str
     input_images: list[str]
-
-    # 理解与规划阶段产物
     mode: str
     request_text: str | None
+    planner_thinking_mode: bool
     request_intent: dict[str, Any] | None
+
+
+class PlanningArtifactsState(TypedDict, total=False):
+    """Planner-visible catalog and plan artifacts."""
+
     package_catalog: list[dict[str, Any]]
     image_analysis: dict[str, Any] | None
     retrieved_prefs: list[dict[str, Any]]
     edit_plan: dict[str, Any] | None
+    current_round: int
+    continue_to_round_2: bool
+    round_plans: dict[str, Any]
+    round_eval_reports: dict[str, Any]
 
-    # 执行阶段产物
+
+class ExecutionArtifactsState(TypedDict, total=False):
+    """Execution-time masks, traces, and round outputs."""
+
     masks: dict[str, str]
     candidate_outputs: list[str]
     execution_trace: list[dict[str, Any]]
     segmentation_trace: list[dict[str, Any]]
+    fallback_trace: list[dict[str, Any]]
     round_outputs: dict[str, Any]
-    round_plans: dict[str, Any]
-    round_eval_reports: dict[str, Any]
     round_execution_traces: dict[str, Any]
     round_segmentation_traces: dict[str, Any]
 
-    # 评估与结果阶段产物
+
+class ReviewArtifactsState(TypedDict, total=False):
+    """Evaluation, memory, and human review state."""
+
     eval_report: dict[str, Any] | None
     selected_output: str | None
-    current_round: int
-    continue_to_round_2: bool
-
-    # 长期记忆写回候选
     memory_write_candidates: list[dict[str, Any]]
-
-    # 人工审核控制字段
     approval_required: bool
     approval_payload: dict[str, Any] | None
+
+
+class EditState(
+    RequestContextState,
+    PlanningArtifactsState,
+    ExecutionArtifactsState,
+    ReviewArtifactsState,
+    total=False,
+):
+    """LangGraph state for an edit thread."""
+
+
+def coerce_request_intent(value: RequestIntent | dict[str, Any] | None) -> RequestIntent | None:
+    """Normalize a request-intent payload into a typed object."""
+
+    if value is None:
+        return None
+    return value if isinstance(value, RequestIntent) else RequestIntent.model_validate(value)
+
+
+def coerce_image_analysis(value: AnalyzeImageResult | dict[str, Any] | None) -> AnalyzeImageResult | None:
+    """Normalize an image-analysis payload into a typed object."""
+
+    if value is None:
+        return None
+    return value if isinstance(value, AnalyzeImageResult) else AnalyzeImageResult.model_validate(value)
+
+
+def coerce_edit_plan(value: EditPlan | dict[str, Any] | None) -> EditPlan | None:
+    """Normalize an edit-plan payload into a typed object."""
+
+    if value is None:
+        return None
+    return value if isinstance(value, EditPlan) else EditPlan.model_validate(value)
+
+
+def coerce_eval_report(value: EvaluationReport | dict[str, Any] | None) -> EvaluationReport | None:
+    """Normalize an evaluation report into a typed object."""
+
+    if value is None:
+        return None
+    return value if isinstance(value, EvaluationReport) else EvaluationReport.model_validate(value)
+
+
+def coerce_approval_payload(value: ApprovalPayload | dict[str, Any] | None) -> ApprovalPayload | None:
+    """Normalize an approval payload into a typed object."""
+
+    if value is None:
+        return None
+    return value if isinstance(value, ApprovalPayload) else ApprovalPayload.model_validate(value)
+
+
+def coerce_execution_trace(values: list[ExecutionTraceItem | dict[str, Any]] | None) -> list[ExecutionTraceItem]:
+    """Normalize execution trace items into typed objects."""
+
+    return [item if isinstance(item, ExecutionTraceItem) else ExecutionTraceItem.model_validate(item) for item in values or []]
+
+
+def coerce_segmentation_trace(values: list[SegmentationTraceItem | dict[str, Any]] | None) -> list[SegmentationTraceItem]:
+    """Normalize segmentation trace items into typed objects."""
+
+    return [item if isinstance(item, SegmentationTraceItem) else SegmentationTraceItem.model_validate(item) for item in values or []]
+
+
+def coerce_fallback_trace(values: list[FallbackTraceItem | dict[str, Any]] | None) -> list[FallbackTraceItem]:
+    """Normalize fallback trace items into typed objects."""
+
+    return [item if isinstance(item, FallbackTraceItem) else FallbackTraceItem.model_validate(item) for item in values or []]
+
+
+def coerce_memory_write_candidates(
+    values: list[MemoryWriteCandidate | dict[str, Any]] | None,
+) -> list[MemoryWriteCandidate]:
+    """Normalize memory write candidates into typed objects."""
+
+    return [item if isinstance(item, MemoryWriteCandidate) else MemoryWriteCandidate.model_validate(item) for item in values or []]

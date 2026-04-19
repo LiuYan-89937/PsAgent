@@ -93,6 +93,20 @@ class RepairPortraitPackagesExtendedTest(unittest.TestCase):
         self.assertAlmostEqual(normalized["luminance_shift"], 0.18)
         self.assertTrue(result.ok)
 
+    def test_point_color_strength_generates_more_visible_default_offsets(self) -> None:
+        package = PointColorPackage()
+        normalized = package.normalize(
+            {
+                "op": "point_color",
+                "region": "whole_image",
+                "params": {"strength": 0.3, "target_color": "skin"},
+            },
+            self.context,
+        )
+
+        self.assertGreater(normalized["saturation_shift"], 0.1)
+        self.assertGreater(normalized["luminance_shift"], 0.06)
+
     def test_portrait_local_tools_execute_with_shared_mask(self) -> None:
         tools = [
             (BlemishRemovePackage(), {"strength": 0.25}),
@@ -130,6 +144,26 @@ class RepairPortraitPackagesExtendedTest(unittest.TestCase):
         center_delta = np.abs(output[11, 11] - original[11, 11]).mean()
         outside_delta = np.abs(output[28, 28] - original[28, 28]).mean()
         self.assertGreater(center_delta, outside_delta)
+
+    def test_skin_smooth_keeps_strong_local_edge_contrast(self) -> None:
+        image = Image.new("RGB", (32, 32), (214, 176, 154))
+        for x in range(12, 15):
+            for y in range(6, 26):
+                image.putpixel((x, y), (48, 34, 34))
+        image.save(self.image_path)
+
+        package = SkinSmoothPackage()
+        result = package.execute(
+            {"op": "skin_smooth", "region": "focus", "params": {"strength": 0.42}},
+            self.context,
+        )
+
+        self.assertTrue(result.ok)
+        original = np.asarray(Image.open(self.image_path).convert("RGB"), dtype=np.float32)
+        output = np.asarray(Image.open(result.output_image or "").convert("RGB"), dtype=np.float32)
+        original_contrast = np.abs(original[14, 13] - original[14, 16]).mean()
+        output_contrast = np.abs(output[14, 13] - output[14, 16]).mean()
+        self.assertGreater(output_contrast, original_contrast * 0.6)
 
 
 if __name__ == "__main__":

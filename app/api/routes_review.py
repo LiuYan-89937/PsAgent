@@ -41,9 +41,9 @@ async def resume_review(
         ):
             pass
     except Exception as exc:
-        job_store.update(
+        job_store.set_status(
             payload.job_id,
-            status="failed",
+            "failed",
             error=str(exc),
             error_detail=build_error_detail(exc, stage="human_review", node="human_review"),
             current_stage="failed",
@@ -53,18 +53,20 @@ async def resume_review(
 
     final_state = read_final_state(graph, config)
     status = "completed" if payload.approved else "failed"
-    completed = job_store.update(
+    completed = job_store.set_execution_result(
         payload.job_id,
         status=collect_terminal_status(final_state) if payload.approved else status,
         edit_plan=final_state.get("edit_plan"),
         eval_report=final_state.get("eval_report"),
         execution_trace=final_state.get("execution_trace") or [],
         segmentation_trace=final_state.get("segmentation_trace") or [],
+        fallback_trace=final_state.get("fallback_trace") or [],
         round_plans=final_state.get("round_plans") or {},
         round_eval_reports=final_state.get("round_eval_reports") or {},
         round_execution_traces=final_state.get("round_execution_traces") or {},
         round_segmentation_traces=final_state.get("round_segmentation_traces") or {},
         approval_required=bool(final_state.get("approval_required")),
+        request_text=final_state.get("request_text"),
         current_stage="completed" if payload.approved else "failed",
         current_message="审核通过，任务完成" if payload.approved else "审核拒绝，任务结束",
     )

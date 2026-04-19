@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.graph.fallbacks import append_fallback_trace
 from app.graph.state import EditState, PackageCatalogItem, RequestIntent, RequestPackageHint
 from app.tools import PARSE_REQUEST_KEYWORDS, WHOLE_IMAGE_ONLY_TOOL_NAMES
 from app.services.parse_request_model import (
@@ -69,15 +70,15 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
 
 
 def _estimate_strength(text: str) -> float:
-    """Map qualitative adverbs to a conservative default strength."""
+    """Map qualitative adverbs to a more visible default strength."""
 
     if any(word in text for word in ("轻微", "稍微", "一点", "自然")):
-        return 0.15
+        return 0.22
     if any(word in text for word in ("明显", "加强", "增强")):
-        return 0.35
+        return 0.45
     if any(word in text for word in ("强烈", "大幅", "很")):
-        return 0.55
-    return 0.25
+        return 0.68
+    return 0.32
 
 
 def _append_package_request(
@@ -204,15 +205,40 @@ def parse_request(state: EditState) -> dict:
     ]
 
     if parse_request_model_available() and request_text:
-        validated_intent = generate_request_intent_with_qwen(
-            request_text=request_text,
-            package_catalog=package_catalog,
-        )
-        return {
-            "request_text": request_text,
-            "mode": state.get("mode", validated_intent.mode),
-            "request_intent": validated_intent.model_dump(mode="json"),
-        }
+        try:
+            validated_intent = generate_request_intent_with_qwen(
+                request_text=request_text,
+                package_catalog=package_catalog,
+            )
+            return {
+                "request_text": request_text,
+                "mode": state.get("mode", validated_intent.mode),
+                "request_intent": validated_intent.model_dump(mode="json"),
+            }
+        except RuntimeError as error:
+            fallback_trace = append_fallback_trace(
+                state.get("fallback_trace"),
+                stage="parse_request",
+                source="parse_request_model",
+                location="request_intent",
+                strategy="heuristic_request_intent",
+                message="需求理解模型不可用，改用规则归一化。",
+                error=str(error),
+            )
+        else:
+            fallback_trace = state.get("fallback_trace", [])
+    else:
+        fallback_trace = list(state.get("fallback_trace", []))
+        if request_text:
+            fallback_trace = append_fallback_trace(
+                fallback_trace,
+                stage="parse_request",
+                source="parse_request_model",
+                location="request_intent",
+                strategy="heuristic_request_intent",
+                message="需求理解模型不可用，改用规则归一化。",
+                error=None,
+            )
 
     auto_markers = ("自动", "你看着修", "帮我修", "随便修", "auto")
     explicit_requests = _infer_requested_packages(request_text)
@@ -233,4 +259,5 @@ def parse_request(state: EditState) -> dict:
         "request_text": request_text,
         "mode": state.get("mode", mode),
         "request_intent": validated_intent.model_dump(mode="json"),
+        "fallback_trace": fallback_trace,
     }

@@ -2,6 +2,7 @@
 
 from langgraph.graph import END, START, StateGraph
 
+from app.graph.nodes.bootstrap_request import bootstrap_request
 from app.graph.nodes.analyze_image import analyze_image
 from app.graph.nodes.evaluate_result import evaluate_result, evaluate_round_1, finalize_round_1_result
 from app.graph.nodes.human_review import human_review
@@ -33,6 +34,7 @@ def build_graph(checkpointer=None, store=None):
         output_schema=GraphOutputState,
     )
 
+    builder.add_node("bootstrap_request", bootstrap_request)
     builder.add_node("load_context", load_context)
     builder.add_node("analyze_image", analyze_image)
     builder.add_node("parse_request", parse_request)
@@ -47,7 +49,8 @@ def build_graph(checkpointer=None, store=None):
     builder.add_node("human_review", human_review)
     builder.add_node("update_memory", update_memory)
 
-    builder.add_edge(START, "load_context")
+    builder.add_edge(START, "bootstrap_request")
+    builder.add_edge("bootstrap_request", "load_context")
     builder.add_edge("load_context", "analyze_image")
     builder.add_edge("analyze_image", "parse_request")
     builder.add_edge("parse_request", "plan_execute_round_1")

@@ -51,6 +51,16 @@ def _blend_and_save(
     return save_result_array(np.clip(blended * 255.0, 0, 255), output_path)
 
 
+def _structure_protection_gate(image_float: np.ndarray) -> np.ndarray:
+    """Return a per-pixel gate that suppresses smoothing on strong edges."""
+
+    luminance = cv2.cvtColor((image_float * 255.0).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)[:, :, 0] / 255.0
+    grad_x = cv2.Sobel(luminance, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(luminance, cv2.CV_32F, 0, 1, ksize=3)
+    gradient = cv2.GaussianBlur(np.sqrt(grad_x * grad_x + grad_y * grad_y), (0, 0), sigmaX=0.8, sigmaY=0.8)
+    return np.clip(1.0 - gradient * 5.2, 0.08, 1.0).astype(np.float32)
+
+
 def _auto_defect_mask(
     image_rgb: np.ndarray,
     *,
@@ -156,12 +166,18 @@ def apply_skin_smooth(
         smooth_strength=smooth_strength,
         detail_protection=detail_protection,
     )
+    structure_gate = _structure_protection_gate(image_float)
 
     hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
     saturation = hsv[:, :, 1] / 255.0
-    sat_gate = np.clip(1.0 - saturation * saturation_protection, 0.72, 1.0)
-    mixed = np.clip(image_float * (1.0 - smooth_strength * 0.58) + smoothed * (smooth_strength * 0.58), 0.0, 1.0)
-    adjusted = np.clip(mixed * sat_gate[:, :, None] + image_float * (1.0 - sat_gate[:, :, None]), 0.0, 1.0)
+    sat_gate = np.clip(1.0 - saturation * saturation_protection, 0.46, 1.0).astype(np.float32)
+    smooth_gate = np.clip(structure_gate * sat_gate, 0.0, 1.0)
+    smooth_alpha = np.clip(smooth_strength * 0.42, 0.0, 0.42)
+    adjusted = np.clip(
+        image_float * (1.0 - smooth_alpha * smooth_gate[:, :, None]) + smoothed * (smooth_alpha * smooth_gate[:, :, None]),
+        0.0,
+        1.0,
+    )
     return _blend_and_save(image_float, adjusted, output_path, mask_np=mask_np)
 
 
@@ -202,7 +218,10 @@ def apply_point_color_adjustment(
 
     color_key = str(target_color or "").strip().lower()
     if color_key == "white":
-        target_mask = np.clip((0.22 - saturation) / 0.22, 0.0, 1.0) * np.clip((value - 0.58) / 0.42, 0.0, 1.0)
+        target_mask = np.power(np.clip((0.26 - saturation) / 0.26, 0.0, 1.0), 1.1) * np.power(
+            np.clip((value - 0.5) / 0.5, 0.0, 1.0),
+            0.9,
+        )
     else:
         preset = _POINT_COLOR_PRESETS.get(color_key, _POINT_COLOR_PRESETS["orange"])
         center = float(target_hue if target_hue is not None else preset[0])
@@ -226,8 +245,20 @@ def apply_point_color_adjustment(
 
     adjusted_hsv = hsv.copy()
     adjusted_hsv[:, :, 0] = (adjusted_hsv[:, :, 0] + (hue_shift / 2.0) * target_mask) % 180.0
-    adjusted_hsv[:, :, 1] = np.clip(adjusted_hsv[:, :, 1] * (1.0 + saturation_shift * target_mask), 0.0, 255.0)
-    adjusted_hsv[:, :, 2] = np.clip(adjusted_hsv[:, :, 2] * (1.0 + luminance_shift * target_mask), 0.0, 255.0)
+    adjusted_hsv[:, :, 1] = np.clip(
+        adjusted_hsv[:, :, 1] * (1.0 + saturation_shift * target_mask * 1.18),
+        0.0,
+        255.0,
+    )
+    positive_lift = np.clip(luminance_shift, 0.0, 1.0)
+    negative_lift = np.clip(-luminance_shift, 0.0, 1.0)
+    adjusted_hsv[:, :, 2] = np.clip(
+        adjusted_hsv[:, :, 2] * (1.0 + luminance_shift * target_mask * 0.9)
+        + positive_lift * target_mask * 18.0
+        - negative_lift * target_mask * 10.0,
+        0.0,
+        255.0,
+    )
     adjusted_rgb = cv2.cvtColor(adjusted_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32) / 255.0
     return _blend_and_save(image_float, adjusted_rgb, output_path, mask_np=None)
 
@@ -275,32 +306,62 @@ def apply_regional_enhancement(
 
     adjusted_rgb = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32) / 255.0
     if exposure_boost != 0.0:
-        adjusted_rgb = np.clip(adjusted_rgb * (2 ** exposure_boost), 0.0, 1.0)
+        lab = rgb_to_lab_float(adjusted_rgb)
+        luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+        if exposure_boost > 0:
+            shadow_gate = shadows_mask(luminance, 0.62)
+            midtone_gate = midtones_mask(luminance, 0.84)
+            highlight_hold = 1.0 - highlights_mask(luminance, 0.26 + highlight_protection * 0.24)
+            lift = (shadow_gate * 1.02 + midtone_gate * 0.7) * exposure_boost
+            luminance = np.clip(
+                luminance
+                + (1.0 - luminance) * lift * 0.62 * highlight_hold
+                + exposure_boost * midtone_gate * 0.05,
+                0.0,
+                1.0,
+            )
+        else:
+            highlight_gate = highlights_mask(luminance, 0.42)
+            midtone_gate = midtones_mask(luminance, 0.8)
+            drop = abs(exposure_boost) * (highlight_gate * 0.92 + midtone_gate * 0.42)
+            luminance = np.clip(luminance * (1.0 - drop * 0.42), 0.0, 1.0)
+        lab[:, :, 0] = luminance * 100.0
+        adjusted_rgb = lab_float_to_rgb(lab)
 
     if warmth_shift != 0.0 or shadow_lift != 0.0:
         lab = rgb_to_lab_float(adjusted_rgb)
-        luminance = lab[:, :, 0] / 100.0
+        luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
         if warmth_shift != 0.0:
-            lab[:, :, 2] = np.clip(lab[:, :, 2] + warmth_shift * 8.0, -127.0, 127.0)
+            lab[:, :, 2] = np.clip(lab[:, :, 2] + warmth_shift * 9.5, -127.0, 127.0)
+            lab[:, :, 1] = np.clip(lab[:, :, 1] + warmth_shift * 2.2, -127.0, 127.0)
         if shadow_lift != 0.0:
-            shadow_gate = shadows_mask(luminance, 0.48)
-            lab[:, :, 0] = np.clip(lab[:, :, 0] + shadow_gate * shadow_lift * 10.0, 0.0, 100.0)
+            shadow_gate = shadows_mask(luminance, 0.52)
+            lab[:, :, 0] = np.clip(lab[:, :, 0] + shadow_gate * shadow_lift * 13.0, 0.0, 100.0)
         adjusted_rgb = lab_float_to_rgb(lab)
 
     if smooth_amount > 0.0:
         smoothed = _edge_preserving_smooth(
             (adjusted_rgb * 255.0).astype(np.uint8),
             smooth_strength=smooth_amount,
-            detail_protection=0.76,
+            detail_protection=0.84,
         )
-        adjusted_rgb = np.clip(adjusted_rgb * (1.0 - smooth_amount * 0.52) + smoothed * (smooth_amount * 0.52), 0.0, 1.0)
+        structure_gate = _structure_protection_gate(adjusted_rgb)
+        luminance = cv2.cvtColor((adjusted_rgb * 255.0).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)[:, :, 0] / 255.0
+        highlight_gate = 1.0 - highlights_mask(luminance, 0.28 + highlight_protection * 0.18)
+        smooth_gate = np.clip(structure_gate * highlight_gate, 0.0, 1.0)
+        smooth_alpha = np.clip(smooth_amount * 0.28, 0.0, 0.28)
+        adjusted_rgb = np.clip(
+            adjusted_rgb * (1.0 - smooth_alpha * smooth_gate[:, :, None]) + smoothed * (smooth_alpha * smooth_gate[:, :, None]),
+            0.0,
+            1.0,
+        )
 
     if clarity_boost > 0.0 or sharpen_amount > 0.0:
         luminance = cv2.cvtColor((adjusted_rgb * 255.0).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)[:, :, 0] / 255.0
         local = cv2.GaussianBlur(luminance, (0, 0), sigmaX=1.0 + clarity_boost * 2.6, sigmaY=1.0 + clarity_boost * 2.6)
         detail = luminance - local
         highlight_gate = 1.0 - highlights_mask(luminance, 0.34 + highlight_protection * 0.2)
-        amount = clarity_boost * 0.22 + sharpen_amount * 0.34
+        amount = clarity_boost * 0.28 + sharpen_amount * 0.42
         new_l = np.clip(luminance + detail * amount * highlight_gate, 0.0, 1.0)
         lab = cv2.cvtColor((adjusted_rgb * 255.0).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
         lab[:, :, 0] = new_l * 255.0
@@ -781,12 +842,25 @@ def apply_glow_highlight(
 
     image_rgb, image_float = _load_rgb_float(image_path)
     luminance = cv2.cvtColor((image_float * 255.0).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)[:, :, 0] / 255.0
-    bright_mask = np.clip((luminance - threshold) / max(1.0 - threshold, 1e-6), 0.0, 1.0)
+    bright_mask = np.power(np.clip((luminance - threshold) / max(1.0 - threshold, 1e-6), 0.0, 1.0), 0.82)
     glow_source = image_float * bright_mask[:, :, None]
-    glow = cv2.GaussianBlur(glow_source, (0, 0), sigmaX=4.0 + amount * 12.0, sigmaY=4.0 + amount * 12.0)
-    glow[:, :, 0] = np.clip(glow[:, :, 0] * (1.0 + warmth * 0.12), 0.0, 1.0)
-    glow[:, :, 2] = np.clip(glow[:, :, 2] * (1.0 - warmth * 0.08), 0.0, 1.0)
-    adjusted = np.clip(1.0 - (1.0 - image_float) * (1.0 - glow * amount * 0.72), 0.0, 1.0)
+    soft_glow = cv2.GaussianBlur(
+        glow_source,
+        (0, 0),
+        sigmaX=5.0 + amount * 15.0,
+        sigmaY=5.0 + amount * 15.0,
+    )
+    core_glow = cv2.GaussianBlur(
+        glow_source,
+        (0, 0),
+        sigmaX=1.8 + amount * 4.5,
+        sigmaY=1.8 + amount * 4.5,
+    )
+    glow = np.clip(soft_glow * (0.86 + bright_mask[:, :, None] * 0.32) + core_glow * 0.34, 0.0, 1.0)
+    glow[:, :, 0] = np.clip(glow[:, :, 0] * (1.0 + warmth * 0.14), 0.0, 1.0)
+    glow[:, :, 2] = np.clip(glow[:, :, 2] * (1.0 - warmth * 0.1), 0.0, 1.0)
+    lifted = np.clip(image_float + glow * amount * 0.44, 0.0, 1.0)
+    adjusted = np.clip(1.0 - (1.0 - lifted) * (1.0 - glow * amount * 0.46), 0.0, 1.0)
     mask_np = prepare_blend_mask_np(mask_path, (image_rgb.shape[1], image_rgb.shape[0]), feather_radius=feather_radius)
     if mask_np is not None:
         bright_mask = np.clip(bright_mask * mask_np, 0.0, 1.0)

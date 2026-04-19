@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.planner_param_codec import planner_param_spec
 from app.tools.packages.base import MASK_PARAM_KEYS
 
 
@@ -20,6 +21,7 @@ _BOUND_KEYS = (
 def _compact_param_spec(spec: dict[str, Any]) -> dict[str, Any]:
     """Convert a JSON-schema property into a compact param descriptor."""
 
+    planner_spec = planner_param_spec(spec)
     variants = spec.get("anyOf") if isinstance(spec.get("anyOf"), list) else [spec]
     non_null_variants = [
         item
@@ -48,16 +50,23 @@ def _compact_param_spec(spec: dict[str, Any]) -> dict[str, Any]:
             if key in variant and key not in compact:
                 compact[key] = variant[key]
 
-    description = spec.get("description")
+    description = planner_spec.get("description")
     if isinstance(description, str) and description:
         compact["description"] = description
 
-    default_value = spec.get("default")
+    default_value = planner_spec.get("default", spec.get("default"))
     if default_value not in (None, "", [], {}):
         compact["default"] = default_value
 
-    if types:
+    planner_type = planner_spec.get("type")
+    if isinstance(planner_type, str):
+        compact["type"] = planner_type
+    elif types:
         compact["type"] = types[0] if len(types) == 1 else "|".join(types)
+    if isinstance(planner_spec.get("minimum"), (int, float)):
+        compact["minimum"] = planner_spec["minimum"]
+    if isinstance(planner_spec.get("maximum"), (int, float)):
+        compact["maximum"] = planner_spec["maximum"]
     if enum_values:
         compact["enum"] = enum_values
 

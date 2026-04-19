@@ -38,10 +38,11 @@ class ModelContextTest(unittest.TestCase):
         strength = next(item for item in exposure["params"] if item["name"] == "strength")
 
         self.assertEqual(exposure["execution_modes"], ["whole_image", "masked_region"])
-        self.assertEqual(strength["type"], "number")
+        self.assertEqual(strength["type"], "integer")
         self.assertIn("description", strength)
-        self.assertEqual(strength["minimum"], -1.0)
-        self.assertEqual(strength["maximum"], 1.0)
+        self.assertEqual(strength["minimum"], 0)
+        self.assertEqual(strength["maximum"], 100)
+        self.assertIn("仅填 0-100 整数", strength["description"])
 
     def test_parse_request_compact_catalog_omits_param_details(self) -> None:
         full_catalog = build_default_package_registry().export_llm_catalog()
@@ -68,6 +69,10 @@ class ModelContextTest(unittest.TestCase):
         self.assertIn("mask_provider", param_names)
         self.assertIn("mask_prompt", param_names)
         self.assertIn("mask_negative_prompt", param_names)
+        expand_param = next(item for item in shared_params if item["name"] == "mask_expand")
+        self.assertEqual(expand_param["type"], "integer")
+        self.assertEqual(expand_param["minimum"], 0)
+        self.assertEqual(expand_param["maximum"], 100)
 
     def test_compact_request_and_analysis_helpers_keep_decision_fields(self) -> None:
         compact_intent = compact_request_intent_for_model(

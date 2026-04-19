@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type {
+  AssetResponse,
   ExecutionTraceItem,
+  FallbackTraceItem as ApiFallbackTraceItem,
   JobDetailResponse,
   JobEvent,
   SegmentationTraceItem,
@@ -31,6 +33,15 @@ interface TraceViewItem {
   error?: string | null
   maskPath?: string | null
   paramBadges: string[]
+  paramEntries: ParamEntry[]
+  outputImageUrl?: string | null
+  outputFilename?: string | null
+}
+
+interface ParamEntry {
+  key: string
+  label: string
+  value: string
 }
 
 interface ToolSummaryItem {
@@ -59,6 +70,16 @@ interface StageTimingViewItem {
   durationLabel: string
   tone: StatusTone
   meta: string[]
+}
+
+interface FallbackViewItem {
+  key: string
+  stageLabel: string
+  sourceLabel: string
+  locationLabel: string
+  strategyLabel: string
+  message: string
+  error?: string | null
 }
 
 interface PlannerMaskGroup {
@@ -107,10 +128,17 @@ interface SegmentationViewItem {
   error?: string | null
   maskPath?: string | null
   apiChain: string[]
+  attemptIndex?: number | null
+  attemptStrategy?: string | null
+  requestedPrompt?: string | null
+  effectivePrompt?: string | null
+  revertMask?: boolean | null
 }
 
 const props = defineProps<{
   jobDetail: JobDetailResponse
+  showTrace: boolean
+  showDebug: boolean
 }>()
 
 const PACKAGE_META: Record<string, { label: string; description: string }> = {
@@ -181,19 +209,12 @@ const REGION_LABELS: Record<string, string> = {
 }
 
 const STAGE_LABELS: Record<string, string> = {
+  bootstrap_request: '准备修图请求',
   load_context: '加载上下文',
   analyze_image: '分析图片',
   parse_request: '理解需求',
-  build_plan: '生成计划',
-  build_plan_round_1: '生成首轮计划',
-  build_plan_round_2: '生成第二轮计划',
   plan_execute_round_1: '规划并执行第一轮',
   plan_execute_round_2: '规划并执行第二轮',
-  route_executor: '选择执行器',
-  route_executor_round_1: '选择首轮执行器',
-  route_executor_round_2: '选择第二轮执行器',
-  execute_deterministic: '执行全局调整',
-  execute_hybrid: '执行局部调整',
   execute_generative: '执行生成式编辑',
   human_review: '人工确认',
   evaluate_result: '评估结果',
@@ -201,6 +222,29 @@ const STAGE_LABELS: Record<string, string> = {
   evaluate_result_final: '评估最终结果',
   finalize_round_1_result: '确认首轮结果',
   update_memory: '更新记忆',
+}
+
+const FALLBACK_SOURCE_LABELS: Record<string, string> = {
+  parse_request_model: '需求理解模型',
+  analyze_image_model: '图像分析模型',
+  planner_model: '规划模型',
+  planner_tool_model: '实时规划模型',
+  critic_model: '结果评估模型',
+  segmentation_provider: '分割服务',
+  package_execute: '工具执行',
+}
+
+const FALLBACK_STRATEGY_LABELS: Record<string, string> = {
+  heuristic_request_intent: '规则归一化',
+  basic_image_analysis: '基础图像分析',
+  rule_based_plan: '规则规划',
+  execution_only_evaluation: '事实评估',
+  whole_image_execution: '全图执行',
+  skip_local_operation: '跳过局部步骤',
+  keep_current_image: '保留当前结果',
+  rule_plan_execution: '规则规划并执行',
+  finish_current_round: '保留当前轮结果',
+  generic_auto_instruction: '通用美化提示词',
 }
 
 const PARAM_LABELS: Record<string, string> = {
@@ -271,6 +315,16 @@ function getStageLabel(stage?: string | null): string {
   return STAGE_LABELS[stage] ?? stage
 }
 
+function getFallbackSourceLabel(source?: string | null): string {
+  if (!source) return '未标记来源'
+  return FALLBACK_SOURCE_LABELS[source] ?? source
+}
+
+function getFallbackStrategyLabel(strategy?: string | null): string {
+  if (!strategy) return '未标记策略'
+  return FALLBACK_STRATEGY_LABELS[strategy] ?? strategy
+}
+
 function getRoundLabel(roundKey: string, fallbackIndex: number): string {
   const matched = roundKey.match(/round_(\d+)/)
   if (matched) return `第 ${matched[1]} 轮`
@@ -323,6 +377,36 @@ function extractParamBadges(item: ExecutionTraceItem): string[] {
     })
     .slice(0, 6)
     .map(([key, value]) => `${getParamLabel(key)} ${formatValue(value)}`)
+}
+
+function extractParamEntries(item: ExecutionTraceItem): ParamEntry[] {
+  const appliedParams = isRecord(item.applied_params) ? item.applied_params : null
+  const rawParams = appliedParams && isRecord(appliedParams.params) ? appliedParams.params : appliedParams
+  if (!rawParams) return []
+
+  return Object.entries(rawParams)
+    .filter(([, value]) => {
+      if (value == null) return false
+      if (typeof value === 'number') return Math.abs(value) > 0.0001
+      if (typeof value === 'string') return value.length > 0
+      if (typeof value === 'boolean') return value
+      if (Array.isArray(value)) return value.length > 0
+      if (isRecord(value)) return Object.keys(value).length > 0
+      return true
+    })
+    .map(([key, value]) => ({
+      key,
+      label: getParamLabel(key),
+      value: formatValue(value),
+    }))
+}
+
+function getOutputAsset(item: ExecutionTraceItem): AssetResponse | null {
+  const outputAsset = item.output_asset
+  if (isRecord(outputAsset) && typeof outputAsset.content_url === 'string') {
+    return outputAsset as AssetResponse
+  }
+  return null
 }
 
 function getStatusTone(item: { ok?: boolean | null; fallbackUsed?: boolean; error?: string | null }): StatusTone {
@@ -443,6 +527,9 @@ const traceGroups = computed<TraceGroup[]>(() => {
               error: item.error,
               maskPath: typeof item.mask_path === 'string' ? item.mask_path : null,
               paramBadges: extractParamBadges(item),
+              paramEntries: extractParamEntries(item),
+              outputImageUrl: getOutputAsset(item)?.content_url ?? null,
+              outputFilename: getOutputAsset(item)?.filename ?? null,
             }
           }),
         }
@@ -472,6 +559,9 @@ const traceGroups = computed<TraceGroup[]>(() => {
           error: item.error,
           maskPath: typeof item.mask_path === 'string' ? item.mask_path : null,
           paramBadges: extractParamBadges(item),
+          paramEntries: extractParamEntries(item),
+          outputImageUrl: getOutputAsset(item)?.content_url ?? null,
+          outputFilename: getOutputAsset(item)?.filename ?? null,
         }
       }),
     },
@@ -516,6 +606,11 @@ const segmentationGroups = computed<SegmentationGroup[]>(() => {
               fallbackUsed: Boolean(item.fallback_used),
               error: item.error,
               maskPath: asString(item.mask_path),
+              attemptIndex: typeof item.attempt_index === 'number' ? item.attempt_index : null,
+              attemptStrategy: asString(item.attempt_strategy),
+              requestedPrompt: asString(item.requested_prompt),
+              effectivePrompt: asString(item.effective_prompt),
+              revertMask: typeof item.revert_mask === 'boolean' ? item.revert_mask : null,
               apiChain: asStringArray(item.api_chain),
             }
           }),
@@ -549,6 +644,11 @@ const segmentationGroups = computed<SegmentationGroup[]>(() => {
           fallbackUsed: Boolean(item.fallback_used),
           error: item.error,
           maskPath: asString(item.mask_path),
+          attemptIndex: typeof item.attempt_index === 'number' ? item.attempt_index : null,
+          attemptStrategy: asString(item.attempt_strategy),
+          requestedPrompt: asString(item.requested_prompt),
+          effectivePrompt: asString(item.effective_prompt),
+          revertMask: typeof item.revert_mask === 'boolean' ? item.revert_mask : null,
           apiChain: asStringArray(item.api_chain),
         }
       }),
@@ -559,6 +659,18 @@ const segmentationGroups = computed<SegmentationGroup[]>(() => {
 const flattenedTrace = computed(() => traceGroups.value.flatMap((group) => group.items))
 const flattenedSegmentation = computed(() => segmentationGroups.value.flatMap((group) => group.items))
 const plannedSegmentationCount = computed(() => plannerMaskGroups.value.reduce((total, group) => total + group.items.length, 0))
+const fallbackItems = computed<FallbackViewItem[]>(() => (
+  (props.jobDetail.fallback_trace || []).map((item: ApiFallbackTraceItem, index: number) => ({
+    key: `${item.stage || 'unknown'}-${item.source || 'unknown'}-${item.location || 'unknown'}-${index}`,
+    stageLabel: getStageLabel(typeof item.stage === 'string' ? item.stage : null),
+    sourceLabel: getFallbackSourceLabel(typeof item.source === 'string' ? item.source : null),
+    locationLabel: typeof item.location === 'string' && item.location.length ? item.location : '未标记位置',
+    strategyLabel: getFallbackStrategyLabel(typeof item.strategy === 'string' ? item.strategy : null),
+    message: typeof item.message === 'string' && item.message.length ? item.message : '发生了一次自动降级。',
+    error: typeof item.error === 'string' ? item.error : null,
+  }))
+))
+const fallbackLocationCount = computed(() => new Set(fallbackItems.value.map((item) => `${item.stageLabel}-${item.locationLabel}`)).size)
 
 const toolSummary = computed<ToolSummaryItem[]>(() => {
   const grouped = new Map<string, ToolSummaryItem>()
@@ -595,7 +707,7 @@ const toolSummary = computed<ToolSummaryItem[]>(() => {
 const statCards = computed(() => {
   const total = flattenedTrace.value.length
   const successCount = flattenedTrace.value.filter((item) => item.ok).length
-  const fallbackCount = flattenedTrace.value.filter((item) => item.fallbackUsed).length
+  const fallbackCount = fallbackItems.value.length
   const failureCount = flattenedTrace.value.filter((item) => item.ok === false || item.error).length
 
   return [
@@ -603,10 +715,12 @@ const statCards = computed(() => {
     { label: '实际工具数', value: toolSummary.value.length, tone: 'neutral' as StatusTone },
     { label: '计划分割', value: plannedSegmentationCount.value, tone: 'neutral' as StatusTone },
     { label: '实际分割', value: flattenedSegmentation.value.length, tone: 'neutral' as StatusTone },
+    { label: 'Fallback 次数', value: fallbackCount, tone: fallbackCount > 0 ? 'warning' as StatusTone : 'neutral' as StatusTone },
+    { label: 'Fallback 地点', value: fallbackLocationCount.value, tone: fallbackCount > 0 ? 'warning' as StatusTone : 'neutral' as StatusTone },
     { label: '成功执行', value: successCount, tone: 'success' as StatusTone },
     {
       label: '回退/失败',
-      value: fallbackCount + failureCount,
+      value: failureCount,
       tone: failureCount > 0 ? ('error' as StatusTone) : ('warning' as StatusTone),
     },
   ]
@@ -647,6 +761,7 @@ function buildTimelineEntry(event: JobEvent, index: number): TimelineEntry | nul
     title =
       event.event === 'segmentation_started' ? '开始分割' :
         event.event === 'segmentation_finished' ? '分割完成' :
+          event.event === 'segmentation_skipped' ? '分割跳过' :
           '分割失败'
   } else if (event.event.startsWith('planner_')) {
     title =
@@ -656,8 +771,13 @@ function buildTimelineEntry(event: JobEvent, index: number): TimelineEntry | nul
           event.event === 'planner_tool_finished' ? '规划工具完成' :
             event.event === 'planner_tool_failed' ? '规划工具失败' :
               '规划轮结束'
+  } else if (event.event.startsWith('bootstrap_')) {
+    title =
+      event.event === 'bootstrap_started' ? 'Bootstrap 开始' :
+        event.event === 'bootstrap_finished' ? 'Bootstrap 完成' :
+          'Bootstrap 回退'
   } else if (event.op) {
-    title = `${getPackageMeta(event.op).label}${event.event === 'package_started' ? '开始执行' : event.event === 'package_finished' ? '执行完成' : event.event === 'package_failed' ? '执行失败' : ''}`
+    title = `${getPackageMeta(event.op).label}${event.event === 'package_started' ? '开始执行' : event.event === 'package_finished' ? '执行完成' : event.event === 'package_failed' ? '执行失败' : event.event === 'package_skipped' ? '已跳过' : ''}`
   } else if (event.node) {
     title = getStageLabel(event.node)
   } else if (event.round) {
@@ -683,6 +803,9 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
   props.jobDetail.events
     .filter((event) => [
       'job_created',
+      'bootstrap_started',
+      'bootstrap_finished',
+      'bootstrap_failed',
       'round_started',
       'round_completed',
       'node_started',
@@ -696,9 +819,11 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       'planner_round_finished',
       'segmentation_started',
       'segmentation_finished',
+      'segmentation_skipped',
       'segmentation_failed',
       'package_started',
       'package_finished',
+      'package_skipped',
       'package_failed',
       'interrupt',
       'job_interrupted',
@@ -759,7 +884,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       </div>
     </section>
 
-    <section class="glass-panel stage-panel" v-if="stageTimingItems.length">
+    <section class="glass-panel stage-panel" v-if="showDebug && stageTimingItems.length">
       <div class="section-head">
         <div>
           <h3>阶段耗时</h3>
@@ -783,7 +908,34 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       </div>
     </section>
 
-    <section class="glass-panel planner-panel" v-if="plannerMaskGroups.length">
+    <section class="glass-panel stage-panel" v-if="showDebug && fallbackItems.length">
+      <div class="section-head">
+        <div>
+          <h3>Fallback 统计</h3>
+          <p>这里汇总所有自动降级的次数、发生位置和采用的兜底策略。</p>
+        </div>
+      </div>
+
+      <div class="round-list">
+        <article v-for="item in fallbackItems" :key="item.key" class="tool-card">
+          <div class="tool-card-top">
+            <div>
+              <h4>{{ item.message }}</h4>
+              <code>{{ item.locationLabel }}</code>
+            </div>
+            <span class="status-chip tone-warning">{{ item.strategyLabel }}</span>
+          </div>
+          <div class="tool-card-meta">
+            <span>阶段：{{ item.stageLabel }}</span>
+            <span>来源：{{ item.sourceLabel }}</span>
+            <span>位置：{{ item.locationLabel }}</span>
+          </div>
+          <p v-if="item.error" class="trace-error">{{ item.error }}</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="glass-panel planner-panel" v-if="showTrace && plannerMaskGroups.length">
       <div class="section-head">
         <div>
           <h3>Planner 分割计划</h3>
@@ -839,7 +991,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       </div>
     </section>
 
-    <section class="glass-panel segmentation-panel" v-if="segmentationGroups.length">
+    <section class="glass-panel segmentation-panel" v-if="showTrace && segmentationGroups.length">
       <div class="section-head">
         <div>
           <h3>实际分割明细</h3>
@@ -883,12 +1035,26 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
                   <span v-else-if="item.provider">提供方：{{ item.provider }}</span>
                   <span v-if="item.semanticType">语义分割</span>
                   <span v-if="item.maskPath">已生成区域遮罩</span>
+                  <span v-if="typeof item.attemptIndex === 'number'">尝试：第 {{ item.attemptIndex + 1 }} 次</span>
+                  <span v-if="item.attemptStrategy">策略：{{ item.attemptStrategy }}</span>
                 </div>
 
                 <div class="mask-copy">
                   <div v-if="item.prompt" class="mask-row">
                     <span>Prompt</span>
                     <strong>{{ item.prompt }}</strong>
+                  </div>
+                  <div v-if="item.requestedPrompt && item.requestedPrompt !== item.prompt" class="mask-row">
+                    <span>原始目标</span>
+                    <strong>{{ item.requestedPrompt }}</strong>
+                  </div>
+                  <div v-if="item.effectivePrompt && item.effectivePrompt !== item.prompt" class="mask-row">
+                    <span>实际尝试</span>
+                    <strong>{{ item.effectivePrompt }}</strong>
+                  </div>
+                  <div v-if="typeof item.revertMask === 'boolean'" class="mask-row">
+                    <span>反向遮罩</span>
+                    <strong>{{ item.revertMask ? '是' : '否' }}</strong>
                   </div>
                   <div v-if="item.negativePrompt" class="mask-row">
                     <span>Negative Prompt</span>
@@ -908,7 +1074,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       </div>
     </section>
 
-    <section class="glass-panel details-panel" v-if="traceGroups.length">
+    <section class="glass-panel details-panel" v-if="showTrace && traceGroups.length">
       <div class="section-head">
         <div>
           <h3>执行明细</h3>
@@ -953,6 +1119,27 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
                   </span>
                 </div>
 
+                <div v-if="item.paramEntries.length" class="trace-params">
+                  <div class="trace-section-title">本次入参</div>
+                  <dl class="param-list">
+                    <div v-for="entry in item.paramEntries" :key="`${item.roundKey}-${item.sequence}-${entry.key}`" class="param-row">
+                      <dt>{{ entry.label }}</dt>
+                      <dd>{{ entry.value }}</dd>
+                    </div>
+                  </dl>
+                </div>
+
+                <div v-if="item.outputImageUrl" class="trace-preview">
+                  <div class="trace-section-title">本次工具输出</div>
+                  <div class="trace-image-card">
+                    <img :src="item.outputImageUrl" :alt="item.outputFilename || `${item.opLabel} output`" class="trace-image" />
+                    <div class="trace-image-meta">
+                      <span>调用后图片</span>
+                      <strong>{{ item.outputFilename || '生成结果' }}</strong>
+                    </div>
+                  </div>
+                </div>
+
                 <p v-if="item.error" class="trace-error">{{ item.error }}</p>
               </div>
             </li>
@@ -961,7 +1148,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       </div>
     </section>
 
-    <section class="glass-panel timeline-panel" v-if="timelineEntries.length">
+    <section class="glass-panel timeline-panel" v-if="showTrace && timelineEntries.length">
       <div class="section-head">
         <div>
           <h3>流程记录</h3>
@@ -1241,6 +1428,19 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
   margin-top: 12px;
 }
 
+.trace-params,
+.trace-preview {
+  margin-top: 14px;
+}
+
+.trace-section-title {
+  margin-bottom: 10px;
+  color: #cbd5f5;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .param-badge {
   padding: 6px 10px;
   border-radius: 10px;
@@ -1248,6 +1448,38 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-main);
   font-size: 0.8rem;
+}
+
+.param-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.param-row {
+  display: grid;
+  grid-template-columns: minmax(0, 108px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.param-row dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.param-row dd {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .mask-copy {
@@ -1276,6 +1508,39 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
   color: var(--text-main);
   font-size: 0.88rem;
   line-height: 1.5;
+  word-break: break-word;
+}
+
+.trace-image-card {
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.trace-image {
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  display: block;
+  background:
+    linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(15, 23, 42, 0.2)),
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.06), transparent 48%);
+}
+
+.trace-image-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.trace-image-meta strong {
+  color: var(--text-main);
+  text-align: right;
   word-break: break-word;
 }
 
@@ -1343,6 +1608,10 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
 
 @media (max-width: 960px) {
   .tool-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .param-list {
     grid-template-columns: 1fr;
   }
 }

@@ -18,6 +18,7 @@ export interface EditRequest {
   thread_id?: string | null
   instruction?: string | null
   auto_mode?: boolean
+  planner_thinking_mode?: boolean
   input_asset_ids?: string[]
   input_image_paths?: string[]
 }
@@ -30,6 +31,7 @@ export interface JobSummaryResponse {
   created_at: string
   updated_at: string
   approval_required: boolean
+  request_text?: string | null
   current_stage?: string | null
   current_message?: string | null
   error?: string | null
@@ -55,6 +57,8 @@ export interface ExecutionTraceItem {
   fallback_used?: boolean
   error?: string | null
   output_image?: string | null
+  output_asset_id?: string | null
+  output_asset?: AssetResponse | null
   applied_params?: Record<string, unknown> | null
   mask_path?: string | null
   warnings?: string[] | null
@@ -79,6 +83,24 @@ export interface SegmentationTraceItem {
   mask_path?: string | null
   request_id?: string | null
   api_chain?: string[] | null
+  attempt_index?: number | null
+  attempt_strategy?: string | null
+  requested_prompt?: string | null
+  effective_prompt?: string | null
+  revert_mask?: boolean | null
+  attempts?: Record<string, unknown>[] | null
+  [key: string]: unknown
+}
+
+export interface FallbackTraceItem {
+  index?: number | null
+  stage?: string | null
+  source?: string | null
+  location?: string | null
+  strategy?: string | null
+  message?: string
+  error?: string | null
+  fallback_used?: boolean
   [key: string]: unknown
 }
 
@@ -113,6 +135,7 @@ export interface EditResponse {
   eval_report?: Record<string, unknown> | null
   execution_trace: ExecutionTraceItem[]
   segmentation_trace: SegmentationTraceItem[]
+  fallback_trace: FallbackTraceItem[]
   round_outputs: Record<string, AssetResponse | null>
   round_plans: Record<string, unknown>
   round_eval_reports: Record<string, unknown>
@@ -131,6 +154,7 @@ export interface JobDetailResponse {
   eval_report?: Record<string, unknown> | null
   execution_trace: ExecutionTraceItem[]
   segmentation_trace: SegmentationTraceItem[]
+  fallback_trace: FallbackTraceItem[]
   round_outputs: Record<string, AssetResponse | null>
   round_plans: Record<string, unknown>
   round_eval_reports: Record<string, unknown>
