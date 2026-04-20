@@ -10,8 +10,10 @@ from typing import Any
 
 from langgraph.types import Command
 
+from app.graph.state import ErrorDetail, JobEvent, coerce_job_events
 from app.services.job_store import JobStore
-from app.tools import PACKAGE_STATUS_LABELS
+from app.services.stage_policy import STAGE_LABELS, STAGE_ORDER
+from app.tools import TOOL_STATUS_LABELS
 
 
 NODE_STATUS_LABELS = {
@@ -19,18 +21,26 @@ NODE_STATUS_LABELS = {
     "load_context": "正在加载上下文",
     "analyze_image": "正在分析图片",
     "parse_request": "正在理解用户需求",
-    "plan_execute_round_1": "正在规划并执行第一轮",
-    "plan_execute_round_2": "正在规划并执行第二轮",
+    "build_edit_profile": "正在建立修图画像",
+    "technical_prep_subgraph": "正在执行技术预处理",
+    "global_base_subgraph": "正在执行全局基线",
+    "local_balance_subgraph": "正在执行局部平衡",
+    "subject_refine_subgraph": "正在执行主体优化",
+    "finish_output_subgraph": "正在执行最终收尾",
+    "final_review": "正在评估最终结果",
     "execute_generative": "正在执行生成式编辑",
-    "execute_round_1_generative": "正在执行第一轮生成式编辑",
-    "execute_round_2_generative": "正在执行第二轮生成式编辑",
     "evaluate_result": "正在评估结果",
-    "evaluate_round_1": "正在评估第一轮结果",
-    "evaluate_result_final": "正在评估最终结果",
-    "finalize_round_1_result": "正在确认首轮结果",
     "human_review": "等待人工确认",
     "update_memory": "正在更新记忆",
 }
+
+for _stage_key in STAGE_ORDER:
+    _label = STAGE_LABELS[_stage_key]
+    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_prepare_stage_context", f"正在准备{_label}上下文")
+    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_build_stage_plan", f"正在规划{_label}")
+    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_execute_stage_plan", f"正在执行{_label}")
+    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_stage_guard", f"正在检查{_label}")
+    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_summarize_stage", f"正在总结{_label}")
 
 def build_error_detail(
     exc: Exception,
@@ -40,69 +50,72 @@ def build_error_detail(
     op: str | None = None,
     region: str | None = None,
     extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> ErrorDetail:
     """Build a frontend-friendly structured error payload."""
 
-    detail = {
-        "type": exc.__class__.__name__,
-        "message": str(exc),
-        "stage": stage,
-        "node": node,
-        "op": op,
-        "region": region,
-        "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-    }
+    detail = ErrorDetail(
+        type=exc.__class__.__name__,
+        message=str(exc),
+        stage=stage,
+        node=node,
+        op=op,
+        region=region,
+        traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
     if extra:
-        detail.update(extra)
+        payload = detail.model_dump(mode="json")
+        payload.update(extra)
+        return ErrorDetail.model_validate(payload)
     return detail
 
 
-def make_event(event: str, **payload: Any) -> dict[str, Any]:
+def make_event(event: str, **payload: Any) -> JobEvent:
     """Create a normalized job event payload."""
 
-    return {"event": event, **payload}
+    return JobEvent.model_validate({"event": event, **payload})
 
 
-def _stamp_event(event: dict[str, Any]) -> dict[str, Any]:
+def _stamp_event(event: JobEvent | dict[str, Any]) -> JobEvent:
     """Attach an occurrence timestamp to an event when missing."""
 
-    if event.get("occurred_at"):
-        return event
-    return {
-        **event,
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-    }
+    normalized = coerce_job_events([event])[0]
+    if normalized.occurred_at:
+        return normalized
+    payload = normalized.model_dump(mode="json")
+    payload["occurred_at"] = datetime.now(timezone.utc).isoformat()
+    return JobEvent.model_validate(payload)
 
 
-def format_sse(event: str, data: dict[str, Any]) -> str:
+def format_sse(event: str, data: JobEvent | dict[str, Any]) -> str:
     """Format a single SSE payload."""
 
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    payload = coerce_job_events([data])[0].model_dump(mode="json")
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def append_job_event(job_store: JobStore, job_id: str, event: dict[str, Any]) -> dict[str, Any]:
+def append_job_event(job_store: JobStore, job_id: str, event: JobEvent | dict[str, Any]) -> dict[str, Any]:
     """Persist a job event, update current stage/message, and return the stamped event."""
 
     stamped_event = _stamp_event(event)
     job_store.append_event(
         job_id,
         stamped_event,
-        current_stage=stamped_event.get("stage"),
-        current_message=stamped_event.get("message"),
+        current_stage=stamped_event.stage,
+        current_message=stamped_event.message,
     )
-    return stamped_event
+    return stamped_event.model_dump(mode="json")
 
 
-def compute_stage_timings(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_stage_timings(events: list[JobEvent | dict[str, Any]]) -> list[dict[str, Any]]:
     """Build stage timing summaries from persisted node lifecycle events."""
 
     open_stages: dict[str, dict[str, Any]] = {}
     timings: list[dict[str, Any]] = []
 
-    for event in events:
-        event_type = str(event.get("event") or "")
-        stage = event.get("stage") or event.get("node")
-        occurred_at = event.get("occurred_at")
+    for normalized in coerce_job_events(events):
+        event_type = str(normalized.event or "")
+        stage = normalized.stage or normalized.node
+        occurred_at = normalized.occurred_at
         if not isinstance(stage, str) or not isinstance(occurred_at, str):
             continue
         try:

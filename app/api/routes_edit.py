@@ -21,11 +21,13 @@ from app.api.runtime import (
 from app.api.routes_assets import _build_asset_response
 from app.api.routes_jobs import (
     _build_execution_trace_payload,
+    _build_phase_payloads,
+    _build_segmentation_trace_payload,
+    _dump_feedback_items,
     _dump_fallback_trace,
+    _dump_job_events,
     _dump_segmentation_trace,
     _build_job_summary,
-    _build_round_execution_trace_payloads,
-    _build_round_output_assets,
 )
 from app.api.schemas import EditRequest, EditResponse
 from app.services.asset_store import AssetStore
@@ -92,14 +94,10 @@ async def edit(
         edit_plan=completed.edit_plan.model_dump(mode="json") if completed.edit_plan is not None else None,
         eval_report=completed.eval_report.model_dump(mode="json") if completed.eval_report is not None else None,
         execution_trace=_build_execution_trace_payload(request, completed.execution_trace, asset_store),
-        segmentation_trace=_dump_segmentation_trace(completed.segmentation_trace),
+        segmentation_trace=_build_segmentation_trace_payload(request, completed.segmentation_trace, asset_store),
         fallback_trace=_dump_fallback_trace(completed.fallback_trace),
-        round_outputs=_build_round_output_assets(request, completed, asset_store),
-        round_plans=completed.round_plans,
-        round_eval_reports=completed.round_eval_reports,
-        round_execution_traces=_build_round_execution_trace_payloads(request, completed.round_execution_traces, asset_store),
-        round_segmentation_traces=completed.round_segmentation_traces,
-        events=completed.events,
+        phases=_build_phase_payloads(request, completed.phases, asset_store),
+        events=_dump_job_events(completed.events),
         stage_timings=compute_stage_timings(completed.events),
     )
 

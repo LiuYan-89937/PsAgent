@@ -10,7 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from app.graph.builder import build_graph
 from app.services.asset_store import AssetStore
 from app.services.job_store import JobStore
-from app.tools.packages import PackageRegistry, build_default_package_registry
+from app.tools.tool_registry import ToolRegistry, build_default_tool_registry
 
 
 @lru_cache(maxsize=1)
@@ -28,10 +28,10 @@ def get_graph_app():
 
 
 @lru_cache(maxsize=1)
-def get_package_registry() -> PackageRegistry:
-    """Return the shared package registry."""
+def get_tool_registry() -> ToolRegistry:
+    """Return the shared native tool registry."""
 
-    return build_default_package_registry()
+    return build_default_tool_registry()
 
 
 @lru_cache(maxsize=1)

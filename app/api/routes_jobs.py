@@ -8,7 +8,14 @@ from app.api.deps import get_asset_store, get_job_store
 from app.api.routes_assets import _build_asset_response
 from app.api.runtime import compute_stage_timings
 from app.api.schemas import JobDetailResponse, JobSummaryResponse
-from app.graph.state import EvaluationReport, ExecutionTraceItem, FallbackTraceItem, SegmentationTraceItem
+from app.graph.state import (
+    ExecutionTraceItem,
+    FallbackTraceItem,
+    FeedbackItem,
+    JobEvent,
+    PhaseArtifact,
+    SegmentationTraceItem,
+)
 from app.services.asset_store import AssetStore
 from app.services.job_store import JobRecord, JobStore
 
@@ -34,22 +41,6 @@ def _build_job_summary(record: JobRecord) -> JobSummaryResponse:
     )
 
 
-def _build_round_output_assets(
-    request: Request,
-    record: JobRecord,
-    asset_store: AssetStore,
-) -> dict[str, object | None]:
-    """Convert stored round output asset ids into frontend asset payloads."""
-
-    payload: dict[str, object | None] = {}
-    for round_key, asset_id in record.round_output_asset_ids.items():
-        try:
-            payload[round_key] = _build_asset_response(request, asset_store.require(asset_id))
-        except KeyError:
-            payload[round_key] = None
-    return payload
-
-
 def _build_execution_trace_payload(
     request: Request,
     trace: list[ExecutionTraceItem | dict[str, object]],
@@ -72,32 +63,93 @@ def _build_execution_trace_payload(
     return payload
 
 
-def _build_round_execution_trace_payloads(
-    request: Request,
-    round_execution_traces: dict[str, object],
-    asset_store: AssetStore,
-) -> dict[str, object]:
-    """Expand round execution traces with frontend-safe output assets."""
-
-    payload: dict[str, object] = {}
-    for round_key, items in round_execution_traces.items():
-        if isinstance(items, list):
-            payload[round_key] = _build_execution_trace_payload(request, items, asset_store)
-        else:
-            payload[round_key] = items
-    return payload
-
-
 def _dump_segmentation_trace(trace: list[SegmentationTraceItem | dict[str, object]]) -> list[dict[str, object]]:
     """Dump typed segmentation trace items into JSON-safe dict payloads."""
 
     return [item.model_dump(mode="json") if isinstance(item, SegmentationTraceItem) else dict(item) for item in trace]
 
 
+def _build_segmentation_trace_payload(
+    request: Request,
+    trace: list[SegmentationTraceItem | dict[str, object]],
+    asset_store: AssetStore,
+) -> list[dict[str, object]]:
+    """Expand segmentation trace items with frontend-safe mask/preview asset payloads."""
+
+    payload: list[dict[str, object]] = []
+    for item in trace:
+        trace_item = item.model_dump(mode="json") if isinstance(item, SegmentationTraceItem) else dict(item)
+        mask_asset = None
+        mask_asset_id = trace_item.get("mask_asset_id")
+        if isinstance(mask_asset_id, str):
+            try:
+                mask_asset = _build_asset_response(request, asset_store.require(mask_asset_id))
+            except KeyError:
+                mask_asset = None
+
+        preview_asset = None
+        preview_asset_id = trace_item.get("preview_asset_id")
+        if isinstance(preview_asset_id, str):
+            try:
+                preview_asset = _build_asset_response(request, asset_store.require(preview_asset_id))
+            except KeyError:
+                preview_asset = None
+
+        trace_item["mask_asset"] = mask_asset
+        trace_item["preview_asset"] = preview_asset
+        payload.append(trace_item)
+    return payload
+
+
 def _dump_fallback_trace(trace: list[FallbackTraceItem | dict[str, object]]) -> list[dict[str, object]]:
     """Dump typed fallback trace items into JSON-safe dict payloads."""
 
     return [item.model_dump(mode="json") if isinstance(item, FallbackTraceItem) else dict(item) for item in trace]
+
+
+def _dump_job_events(events: list[JobEvent]) -> list[dict[str, object]]:
+    """Dump persisted job events into JSON-safe dict payloads."""
+
+    return [item.model_dump(mode="json") for item in events]
+
+
+def _dump_feedback_items(items: list[FeedbackItem]) -> list[dict[str, object]]:
+    """Dump feedback items into JSON-safe dict payloads."""
+
+    return [item.model_dump(mode="json") for item in items]
+
+
+def _build_phase_payloads(
+    request: Request,
+    phases: dict[str, PhaseArtifact],
+    asset_store: AssetStore,
+) -> dict[str, dict[str, object]]:
+    """Expand grouped phase artifacts into frontend payloads."""
+
+    payload: dict[str, dict[str, object]] = {}
+    for phase_key, phase in phases.items():
+        phase_payload = phase.model_dump(mode="json")
+        output_payload = phase_payload.get("output")
+        output_asset = None
+        asset_id = output_payload.get("asset_id") if isinstance(output_payload, dict) else None
+        if isinstance(asset_id, str):
+            try:
+                output_asset = _build_asset_response(request, asset_store.require(asset_id))
+            except KeyError:
+                output_asset = None
+        payload[phase_key] = {
+            "plan": phase_payload.get("plan"),
+            "execution_trace": _build_execution_trace_payload(request, phase.execution_trace, asset_store),
+            "segmentation_trace": _build_segmentation_trace_payload(request, phase.segmentation_trace, asset_store),
+            "eval_report": phase_payload.get("eval_report"),
+            "output": output_asset,
+            "summary": phase_payload.get("summary"),
+            "skipped": bool(phase_payload.get("skipped")),
+            "skip_reason": phase_payload.get("skip_reason"),
+            "trigger_reasons": phase_payload.get("trigger_reasons", []),
+            "stopped_early": bool(phase_payload.get("stopped_early")),
+        }
+    return payload
 
 
 @router.get("/{job_id}", response_model=JobDetailResponse)
@@ -129,16 +181,12 @@ async def get_job(
         selected_output=selected_output,
         candidate_outputs=output_assets,
         edit_plan=record.edit_plan.model_dump(mode="json") if record.edit_plan is not None else None,
-        eval_report=record.eval_report.model_dump(mode="json") if isinstance(record.eval_report, EvaluationReport) else None,
+        eval_report=record.eval_report.model_dump(mode="json") if record.eval_report is not None else None,
         execution_trace=_build_execution_trace_payload(request, record.execution_trace, asset_store),
-        segmentation_trace=_dump_segmentation_trace(record.segmentation_trace),
+        segmentation_trace=_build_segmentation_trace_payload(request, record.segmentation_trace, asset_store),
         fallback_trace=_dump_fallback_trace(record.fallback_trace),
-        round_outputs=_build_round_output_assets(request, record, asset_store),
-        round_plans=record.round_plans,
-        round_eval_reports=record.round_eval_reports,
-        round_execution_traces=_build_round_execution_trace_payloads(request, record.round_execution_traces, asset_store),
-        round_segmentation_traces=record.round_segmentation_traces,
-        events=record.events,
+        phases=_build_phase_payloads(request, record.phases, asset_store),
+        events=_dump_job_events(record.events),
         stage_timings=compute_stage_timings(record.events),
-        feedback=record.feedback,
+        feedback=_dump_feedback_items(record.feedback),
     )

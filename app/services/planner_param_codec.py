@@ -6,9 +6,9 @@ import json
 import re
 from typing import Any
 
-from app.tools.packages import build_default_package_registry
-from app.tools.packages.base import WHOLE_IMAGE_REGION
 from app.tools.segmentation_tools import normalize_segmentation_prompt_label
+from app.tools.tool_registry import build_default_tool_registry
+from app.tools.tool_specs import MASK_PARAM_KEYS, WHOLE_IMAGE_REGION
 
 
 def schema_non_null_variants(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -148,9 +148,9 @@ def decode_planner_argument_value(value: Any, spec: dict[str, Any]) -> Any:
 def decode_planner_operation_params(tool_name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any], float | None]:
     """Decode planner arguments into runtime params for a concrete tool."""
 
-    registry = build_default_package_registry()
-    package = registry.require(tool_name)
-    params_schema = package.get_params_schema()
+    registry = build_default_tool_registry()
+    registered_tool = registry.require(tool_name)
+    params_schema = registered_tool.spec.planner_schema
     schema_properties = params_schema.get("properties", {}) if isinstance(params_schema, dict) else {}
     region = str(arguments.get("region") or WHOLE_IMAGE_REGION)
     params: dict[str, Any] = {}
@@ -169,3 +169,34 @@ def decode_planner_operation_params(tool_name: str, arguments: dict[str, Any]) -
     strength = params.get("strength", arguments.get("strength"))
     normalized_strength = float(strength) if isinstance(strength, (int, float)) else None
     return region, params, normalized_strength
+
+
+def normalize_runtime_tool_params(tool_name: str, params: dict[str, Any] | None) -> dict[str, Any]:
+    """Apply ToolSpec defaults and ignore explicit null overrides for runtime execution."""
+
+    registry = build_default_tool_registry()
+    registered_tool = registry.require(tool_name)
+    schema_properties = dict(registered_tool.spec.planner_schema.get("properties") or {})
+    merged = dict(registered_tool.spec.default_params)
+    for key, value in dict(params or {}).items():
+        if value is None:
+            continue
+        if key in schema_properties:
+            merged[key] = value
+    return merged
+
+
+def extract_runtime_mask_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Return only shared mask parameters from a runtime param payload."""
+
+    return {
+        key: value
+        for key, value in params.items()
+        if key in MASK_PARAM_KEYS and value is not None and value != ""
+    }
+
+
+def strip_runtime_mask_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Return runtime tool params without shared mask fields."""
+
+    return {key: value for key, value in params.items() if key not in MASK_PARAM_KEYS}

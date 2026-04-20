@@ -26,7 +26,11 @@
       "constraints": []
     }
   ],
-  "constraints": ["..."]
+  "constraints": ["..."],
+  "goal_summary": "中文简短总结",
+  "wants_repair": true,
+  "wants_style": false,
+  "requires_local_editing": false
 }
 
 整理原则：
@@ -37,4 +41,7 @@
 5. 高层偏好、限制条件和结果倾向，更适合写进 `constraints`。
 6. 如果用户明显想要更强的效果，不要把意图弱化成过于保守的请求。
 7. 不要在这里发明复杂参数，只做稳定归一化。
-8. 只返回 JSON。
+8. `goal_summary` 要简短概括最终想达到的效果。
+9. `wants_repair` 表示用户更偏修复问题；`wants_style` 表示用户更偏氛围和风格；两者可以同时为 true。
+10. `requires_local_editing` 只在明显需要局部处理时设为 true。
+11. 只返回 JSON。

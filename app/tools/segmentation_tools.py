@@ -689,6 +689,7 @@ def generate_fal_sam3_mask(
 
         return SegmentationResult(
             provider="fal_sam3",
+            segmentation_rgba_path=downloaded_mask_path,
             binary_mask_path=binary_mask_path,
             original_image_path=str(original),
             api_chain=("fal_client.upload", model_name),

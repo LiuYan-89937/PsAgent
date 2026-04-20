@@ -34,9 +34,15 @@ class JobStoreTest(unittest.TestCase):
             status="completed",
             request_text="自动生成的提示词",
             output_asset_ids=["asset_1"],
-            round_output_asset_ids={"round_1": "asset_1"},
             execution_trace=[{"op": "adjust_exposure", "ok": True}],
-            round_execution_traces={"round_1": [{"op": "adjust_exposure", "ok": True}]},
+            phases={
+                "global_base": {
+                    "key": "global_base",
+                    "label": "全局基线",
+                    "execution_trace": [{"op": "adjust_exposure", "ok": True}],
+                    "output": {"asset_id": "asset_1"},
+                }
+            },
             current_stage="completed",
             current_message="任务完成",
         )
@@ -44,8 +50,8 @@ class JobStoreTest(unittest.TestCase):
         self.assertEqual(updated.status, "completed")
         self.assertEqual(updated.request_text, "自动生成的提示词")
         self.assertEqual(updated.output_asset_ids, ["asset_1"])
-        self.assertEqual(updated.round_output_asset_ids["round_1"], "asset_1")
         self.assertEqual(updated.execution_trace[0].op, "adjust_exposure")
+        self.assertIn("global_base", updated.phases)
         self.assertEqual(updated.current_stage, "completed")
 
 

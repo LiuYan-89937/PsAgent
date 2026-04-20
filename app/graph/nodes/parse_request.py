@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.graph.fallbacks import append_fallback_trace
-from app.graph.state import EditState, PackageCatalogItem, RequestIntent, RequestPackageHint
+from app.graph.state import EditState, RequestIntent, RequestPackageHint, ToolCatalogItem
 from app.tools import PARSE_REQUEST_KEYWORDS, WHOLE_IMAGE_ONLY_TOOL_NAMES
 from app.services.parse_request_model import (
     generate_request_intent_with_qwen,
@@ -132,42 +132,23 @@ def _infer_requested_packages(text: str) -> list[dict[str, Any]]:
         )
         _append_package_request(
             requests,
-            op="adjust_highlights_shadows",
+            op="adjust_contrast",
             region="backlit subject area",
-            strength=max(strength, 0.24),
-        )
-        _append_package_request(
-            requests,
-            op="adjust_curves",
-            region="whole_image",
-            strength=0.2,
-            params={
-                "shadow_lift": 0.06,
-                "midtone_gamma": 0.97,
-                "highlight_compress": 0.08,
-                "contrast_bias": 0.08,
-            },
+            strength=max(strength, 0.22),
         )
 
     if _contains_any(text, ("夏日", "夏天", "夏日感", "阳光感", "清透", "通透", "空气感", "明媚")):
         _append_package_request(
             requests,
-            op="adjust_white_balance",
-            region="whole_image",
-            strength=0.16,
-        )
-        _append_package_request(
-            requests,
             op="adjust_vibrance_saturation",
             region="whole_image",
-            strength=max(strength, 0.18),
+            strength=max(strength, 0.22),
         )
         _append_package_request(
             requests,
-            op="adjust_dehaze",
-            region="background area",
-            strength=0.14,
-            params={"amount": 0.14, "feather_radius": 22.0},
+            op="adjust_exposure",
+            region="whole_image",
+            strength=0.18,
         )
 
     return requests
@@ -195,20 +176,37 @@ def _infer_constraints(text: str) -> list[str]:
     return constraints
 
 
+def _infer_goal_summary(text: str) -> str:
+    """Build a short goal summary for downstream planning."""
+
+    normalized = " ".join(text.strip().split())
+    if not normalized:
+        return "智能美化并提升整体观感"
+    return normalized[:120]
+
+
+def _infer_requires_local_editing(text: str, requested_packages: list[dict[str, Any]]) -> bool:
+    """Return whether the request clearly needs local operations."""
+
+    if any((item.get("region") or "whole_image") != "whole_image" for item in requested_packages):
+        return True
+    return _contains_any(text, ("脸", "面部", "肤色", "皮肤", "头发", "发丝", "背景", "主体", "人物", "婚纱", "衣服"))
+
+
 def parse_request(state: EditState) -> dict:
     """Determine request mode and extract a planner-friendly request intent."""
 
     request_text = _extract_latest_user_text(state)
-    package_catalog = [
-        PackageCatalogItem.model_validate(item).model_dump(mode="json")
-        for item in state.get("package_catalog", [])
+    tool_catalog = [
+        ToolCatalogItem.model_validate(item).model_dump(mode="json")
+        for item in state.get("tool_catalog", [])
     ]
 
     if parse_request_model_available() and request_text:
         try:
             validated_intent = generate_request_intent_with_qwen(
                 request_text=request_text,
-                package_catalog=package_catalog,
+                tool_catalog=tool_catalog,
             )
             return {
                 "request_text": request_text,
@@ -253,6 +251,10 @@ def parse_request(state: EditState) -> dict:
             for request in explicit_requests
         ],
         constraints=constraints,
+        goal_summary=_infer_goal_summary(request_text),
+        wants_repair=_contains_any(request_text, ("逆光", "背光", "修复", "提亮", "压高光", "层次", "肤色", "降噪", "去瑕疵")),
+        wants_style=_contains_any(request_text, ("质感", "氛围", "色调", "夏日", "通透", "空气感", "胶片", "明媚")),
+        requires_local_editing=_infer_requires_local_editing(request_text, explicit_requests),
     )
 
     return {

@@ -175,6 +175,8 @@ def call_qwen_chat_completion_raw(
     try:
         with request.urlopen(req, timeout=timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
+    except TimeoutError as exc:  # pragma: no cover - network path
+        raise RuntimeError(f"DashScope request timed out after {timeout_seconds:.0f}s.") from exc
     except error.HTTPError as exc:  # pragma: no cover - network path
         detail = exc.read().decode("utf-8", errors="ignore")
         raise RuntimeError(f"DashScope request failed: {detail}") from exc

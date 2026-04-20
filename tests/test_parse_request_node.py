@@ -16,7 +16,7 @@ class ParseRequestNodeTest(unittest.TestCase):
     def test_parse_request_uses_rule_fallback_without_model(self) -> None:
         state = {
             "request_text": "把背景稍微压暗一点，并提亮主体",
-            "package_catalog": [],
+            "tool_catalog": [],
         }
 
         with patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=False):
@@ -28,7 +28,7 @@ class ParseRequestNodeTest(unittest.TestCase):
     def test_parse_request_uses_model_when_available(self) -> None:
         state = {
             "request_text": "帮我自然一点",
-            "package_catalog": [
+            "tool_catalog": [
                 {
                     "name": "adjust_exposure",
                     "description": "Adjust exposure",
@@ -60,7 +60,7 @@ class ParseRequestNodeTest(unittest.TestCase):
     def test_parse_request_marks_layered_repair_and_style_constraints(self) -> None:
         state = {
             "request_text": "夏日质感，修复逆光，自然一点",
-            "package_catalog": [],
+            "tool_catalog": [],
         }
 
         with patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=False):
@@ -72,7 +72,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         self.assertIn("build_summer_mood", constraints)
         self.assertIn("needs_layered_refinement", constraints)
         self.assertIn("adjust_exposure", requested_ops)
-        self.assertIn("adjust_white_balance", requested_ops)
+        self.assertIn("adjust_vibrance_saturation", requested_ops)
 
     def test_parse_request_model_uses_compact_tool_catalog(self) -> None:
         with patch(
@@ -85,7 +85,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         ) as mocked_call:
             generate_request_intent_with_qwen(
                 request_text="提亮一点",
-                package_catalog=[
+                tool_catalog=[
                     {
                         "name": "adjust_exposure",
                         "description": "Adjust exposure",

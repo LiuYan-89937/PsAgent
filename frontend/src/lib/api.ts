@@ -3,9 +3,9 @@ import type {
   EditResponse,
   FeedbackRequest,
   JobDetailResponse,
-  PackageCatalogResponse,
   ResumeReviewRequest,
   ResumeReviewResponse,
+  ToolCatalogResponse,
   UploadAssetsResponse,
   SseEventPayload,
 } from '@/types/api'
@@ -73,8 +73,8 @@ export async function uploadAssets(files: File[]): Promise<UploadAssetsResponse>
   return (await response.json()) as UploadAssetsResponse
 }
 
-export function listPackages(): Promise<PackageCatalogResponse> {
-  return requestJson<PackageCatalogResponse>('/meta/packages')
+export function listPackages(): Promise<ToolCatalogResponse> {
+  return requestJson<ToolCatalogResponse>('/meta/packages')
 }
 
 export function submitEdit(payload: EditRequest): Promise<EditResponse> {

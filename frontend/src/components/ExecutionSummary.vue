@@ -133,6 +133,8 @@ interface SegmentationViewItem {
   requestedPrompt?: string | null
   effectivePrompt?: string | null
   revertMask?: boolean | null
+  maskAsset?: AssetResponse | null
+  previewAsset?: AssetResponse | null
 }
 
 const props = defineProps<{
@@ -213,14 +215,45 @@ const STAGE_LABELS: Record<string, string> = {
   load_context: '加载上下文',
   analyze_image: '分析图片',
   parse_request: '理解需求',
-  plan_execute_round_1: '规划并执行第一轮',
-  plan_execute_round_2: '规划并执行第二轮',
+  build_edit_profile: '建立修图画像',
+  technical_prep_subgraph: '技术预处理',
+  global_base_subgraph: '全局基线',
+  local_balance_subgraph: '局部平衡',
+  subject_refine_subgraph: '主体优化',
+  finish_output_subgraph: '最终收尾',
+  technical_prep: '技术预处理',
+  technical_prep_prepare_stage_context: '准备技术预处理上下文',
+  technical_prep_build_stage_plan: '规划技术预处理',
+  technical_prep_execute_stage_plan: '执行技术预处理',
+  technical_prep_stage_guard: '检查技术预处理',
+  technical_prep_summarize_stage: '总结技术预处理',
+  global_base: '全局基线',
+  global_base_prepare_stage_context: '准备全局基线上下文',
+  global_base_build_stage_plan: '规划全局基线',
+  global_base_execute_stage_plan: '执行全局基线',
+  global_base_stage_guard: '检查全局基线',
+  global_base_summarize_stage: '总结全局基线',
+  local_balance: '局部平衡',
+  local_balance_prepare_stage_context: '准备局部平衡上下文',
+  local_balance_build_stage_plan: '规划局部平衡',
+  local_balance_execute_stage_plan: '执行局部平衡',
+  local_balance_stage_guard: '检查局部平衡',
+  local_balance_summarize_stage: '总结局部平衡',
+  subject_refine: '主体优化',
+  subject_refine_prepare_stage_context: '准备主体优化上下文',
+  subject_refine_build_stage_plan: '规划主体优化',
+  subject_refine_execute_stage_plan: '执行主体优化',
+  subject_refine_stage_guard: '检查主体优化',
+  subject_refine_summarize_stage: '总结主体优化',
+  finish_output: '最终收尾',
+  finish_output_prepare_stage_context: '准备最终收尾上下文',
+  finish_output_build_stage_plan: '规划最终收尾',
+  finish_output_execute_stage_plan: '执行最终收尾',
+  finish_output_stage_guard: '检查最终收尾',
+  finish_output_summarize_stage: '总结最终收尾',
   execute_generative: '执行生成式编辑',
   human_review: '人工确认',
-  evaluate_result: '评估结果',
-  evaluate_round_1: '评估首轮结果',
-  evaluate_result_final: '评估最终结果',
-  finalize_round_1_result: '确认首轮结果',
+  final_review: '最终评估',
   update_memory: '更新记忆',
 }
 
@@ -228,7 +261,6 @@ const FALLBACK_SOURCE_LABELS: Record<string, string> = {
   parse_request_model: '需求理解模型',
   analyze_image_model: '图像分析模型',
   planner_model: '规划模型',
-  planner_tool_model: '实时规划模型',
   critic_model: '结果评估模型',
   segmentation_provider: '分割服务',
   package_execute: '工具执行',
@@ -243,7 +275,7 @@ const FALLBACK_STRATEGY_LABELS: Record<string, string> = {
   skip_local_operation: '跳过局部步骤',
   keep_current_image: '保留当前结果',
   rule_plan_execution: '规则规划并执行',
-  finish_current_round: '保留当前轮结果',
+  finish_current_round: '保留当前阶段结果',
   generic_auto_instruction: '通用美化提示词',
 }
 
@@ -326,14 +358,21 @@ function getFallbackStrategyLabel(strategy?: string | null): string {
 }
 
 function getRoundLabel(roundKey: string, fallbackIndex: number): string {
-  const matched = roundKey.match(/round_(\d+)/)
-  if (matched) return `第 ${matched[1]} 轮`
+  if (roundKey === 'technical_prep') return '技术预处理'
+  if (roundKey === 'global_base') return '全局基线'
+  if (roundKey === 'local_balance') return '局部平衡'
+  if (roundKey === 'subject_refine') return '主体优化'
+  if (roundKey === 'finish_output') return '最终收尾'
   return fallbackIndex === 1 ? '本次执行' : `执行分组 ${fallbackIndex}`
 }
 
 function getRoundSortValue(roundKey: string, fallbackIndex: number): number {
-  const matched = roundKey.match(/round_(\d+)/)
-  return matched ? Number(matched[1]) : fallbackIndex
+  if (roundKey === 'technical_prep') return 1
+  if (roundKey === 'global_base') return 2
+  if (roundKey === 'local_balance') return 3
+  if (roundKey === 'subject_refine') return 4
+  if (roundKey === 'finish_output') return 5
+  return fallbackIndex
 }
 
 function formatValue(value: unknown): string {
@@ -425,7 +464,7 @@ function getStatusLabel(item: { ok?: boolean | null; fallbackUsed?: boolean; err
 
 function getOperationsFromPlan(plan: unknown): Record<string, unknown>[] {
   if (!isRecord(plan)) return []
-  const operations = plan.operations
+  const operations = Array.isArray(plan.steps) ? plan.steps : plan.operations
   return Array.isArray(operations) ? operations.filter(isRecord) : []
 }
 
@@ -458,15 +497,15 @@ function buildPlannerMaskItems(
 }
 
 const plannerMaskGroups = computed<PlannerMaskGroup[]>(() => {
-  const roundEntries = Object.entries(props.jobDetail.round_plans || {}).filter(
-    ([, plan]) => buildPlannerMaskItems(plan, 'noop', 'noop').length > 0,
+  const phaseEntries = Object.entries(props.jobDetail.phases || {}).filter(
+    ([, phase]) => buildPlannerMaskItems(isRecord(phase) ? phase.plan : null, 'noop', 'noop').length > 0,
   )
 
-  if (roundEntries.length > 0) {
-    return roundEntries
-      .map(([roundKey, plan], groupIndex) => ({
+  if (phaseEntries.length > 0) {
+    return phaseEntries
+      .map(([roundKey, phase], groupIndex) => ({
         roundKey,
-        plan,
+        plan: isRecord(phase) ? phase.plan : null,
         sortValue: getRoundSortValue(roundKey, groupIndex + 1),
       }))
       .sort((left, right) => left.sortValue - right.sortValue)
@@ -493,15 +532,15 @@ const plannerMaskGroups = computed<PlannerMaskGroup[]>(() => {
 })
 
 const traceGroups = computed<TraceGroup[]>(() => {
-  const roundEntries = Object.entries(props.jobDetail.round_execution_traces || {}).filter(
-    ([, items]) => Array.isArray(items) && items.length > 0,
+  const phaseEntries = Object.entries(props.jobDetail.phases || {}).filter(
+    ([, phase]) => Array.isArray(phase.execution_trace) && phase.execution_trace.length > 0,
   )
 
-  if (roundEntries.length > 0) {
-    return roundEntries
-      .map(([roundKey, items], groupIndex) => ({
+  if (phaseEntries.length > 0) {
+    return phaseEntries
+      .map(([roundKey, phase], groupIndex) => ({
         roundKey,
-        items,
+        items: phase.execution_trace,
         sortValue: getRoundSortValue(roundKey, groupIndex + 1),
       }))
       .sort((left, right) => left.sortValue - right.sortValue)
@@ -569,15 +608,15 @@ const traceGroups = computed<TraceGroup[]>(() => {
 })
 
 const segmentationGroups = computed<SegmentationGroup[]>(() => {
-  const roundEntries = Object.entries(props.jobDetail.round_segmentation_traces || {}).filter(
-    ([, items]) => Array.isArray(items) && items.length > 0,
+  const phaseEntries = Object.entries(props.jobDetail.phases || {}).filter(
+    ([, phase]) => Array.isArray(phase.segmentation_trace) && phase.segmentation_trace.length > 0,
   )
 
-  if (roundEntries.length > 0) {
-    return roundEntries
-      .map(([roundKey, items], groupIndex) => ({
+  if (phaseEntries.length > 0) {
+    return phaseEntries
+      .map(([roundKey, phase], groupIndex) => ({
         roundKey,
-        items,
+        items: phase.segmentation_trace,
         sortValue: getRoundSortValue(roundKey, groupIndex + 1),
       }))
       .sort((left, right) => left.sortValue - right.sortValue)
@@ -611,6 +650,8 @@ const segmentationGroups = computed<SegmentationGroup[]>(() => {
               requestedPrompt: asString(item.requested_prompt),
               effectivePrompt: asString(item.effective_prompt),
               revertMask: typeof item.revert_mask === 'boolean' ? item.revert_mask : null,
+              maskAsset: isRecord(item.mask_asset) ? (item.mask_asset as AssetResponse) : null,
+              previewAsset: isRecord(item.preview_asset) ? (item.preview_asset as AssetResponse) : null,
               apiChain: asStringArray(item.api_chain),
             }
           }),
@@ -649,6 +690,8 @@ const segmentationGroups = computed<SegmentationGroup[]>(() => {
           requestedPrompt: asString(item.requested_prompt),
           effectivePrompt: asString(item.effective_prompt),
           revertMask: typeof item.revert_mask === 'boolean' ? item.revert_mask : null,
+          maskAsset: isRecord(item.mask_asset) ? (item.mask_asset as AssetResponse) : null,
+          previewAsset: isRecord(item.preview_asset) ? (item.preview_asset as AssetResponse) : null,
           apiChain: asStringArray(item.api_chain),
         }
       }),
@@ -766,11 +809,19 @@ function buildTimelineEntry(event: JobEvent, index: number): TimelineEntry | nul
   } else if (event.event.startsWith('planner_')) {
     title =
       event.event === 'planner_started' ? '规划开始' :
+        event.event === 'planner_finished' ? '规划完成' :
         event.event === 'planner_tool_called' ? '规划选择工具' :
           event.event === 'planner_tool_resolved' ? '规划工具纠正' :
           event.event === 'planner_tool_finished' ? '规划工具完成' :
             event.event === 'planner_tool_failed' ? '规划工具失败' :
               '规划轮结束'
+  } else if (event.event.startsWith('stage_')) {
+    title =
+      event.event === 'stage_started' ? '阶段开始' :
+        event.event === 'stage_execution_started' ? '阶段执行开始' :
+          event.event === 'stage_execution_completed' ? '阶段执行完成' :
+            event.event === 'stage_completed' ? '阶段完成' :
+              '阶段事件'
   } else if (event.event.startsWith('bootstrap_')) {
     title =
       event.event === 'bootstrap_started' ? 'Bootstrap 开始' :
@@ -806,12 +857,15 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       'bootstrap_started',
       'bootstrap_finished',
       'bootstrap_failed',
-      'round_started',
-      'round_completed',
+      'stage_started',
+      'stage_execution_started',
+      'stage_execution_completed',
+      'stage_completed',
       'node_started',
       'node_finished',
       'node_failed',
       'planner_started',
+      'planner_finished',
       'planner_tool_called',
       'planner_tool_resolved',
       'planner_tool_finished',
@@ -869,7 +923,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
           <p class="tool-description">{{ tool.description }}</p>
           <div class="tool-card-meta">
             <span>区域：{{ tool.regions.join(' / ') }}</span>
-            <span>轮次：{{ tool.rounds.join(' / ') }}</span>
+            <span>阶段：{{ tool.rounds.join(' / ') }}</span>
           </div>
           <div class="tool-card-status">
             <span class="status-chip tone-success">成功 {{ tool.successCount }}</span>
@@ -1066,6 +1120,21 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
                   </div>
                 </div>
 
+                <div v-if="item.previewAsset || item.maskAsset" class="trace-preview">
+                  <div class="trace-section-title">分割返回结果</div>
+                  <div class="trace-image-card">
+                    <img
+                      :src="(item.previewAsset || item.maskAsset)?.content_url"
+                      :alt="(item.previewAsset || item.maskAsset)?.filename || 'segmentation result'"
+                      class="trace-image"
+                    />
+                    <div class="trace-image-meta">
+                      <span>{{ item.previewAsset ? 'Provider 返回图' : '二值遮罩' }}</span>
+                      <strong>{{ (item.previewAsset || item.maskAsset)?.filename || '分割结果' }}</strong>
+                    </div>
+                  </div>
+                </div>
+
                 <p v-if="item.error" class="trace-error">{{ item.error }}</p>
               </div>
             </li>
@@ -1078,7 +1147,7 @@ const timelineEntries = computed<TimelineEntry[]>(() => (
       <div class="section-head">
         <div>
           <h3>执行明细</h3>
-          <p>按轮次展开每一次实际调用，能看到工具、作用区域、参数和执行状态。</p>
+          <p>按阶段展开每一次实际调用，能看到工具、作用区域、参数和执行状态。</p>
         </div>
       </div>
 

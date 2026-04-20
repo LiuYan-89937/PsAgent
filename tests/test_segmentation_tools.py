@@ -21,7 +21,8 @@ from app.tools.segmentation_tools import (
     normalize_segmentation_prompt_label,
     resolve_region_mask,
 )
-from app.tools.packages import AdjustExposurePackage, OperationContext
+from app.tools.tool_registry import build_default_tool_registry
+from app.tools.tool_specs import MaskParams
 
 
 class SegmentationToolsTest(unittest.TestCase):
@@ -170,56 +171,37 @@ class SegmentationToolsTest(unittest.TestCase):
         self.assertEqual(second_call["prompt"], "person")
         self.assertTrue(second_call["revert_mask"])
 
-    def test_package_schema_includes_mask_prompt_fields(self) -> None:
-        schema = AdjustExposurePackage().get_params_schema()
+    def test_native_tool_schema_includes_mask_prompt_fields(self) -> None:
+        schema = build_default_tool_registry().require("adjust_exposure").spec.planner_schema
         self.assertIn("mask_provider", schema["properties"])
         self.assertIn("mask_prompt", schema["properties"])
         self.assertIn("mask_negative_prompt", schema["properties"])
 
-    def test_package_validation_allows_text_guided_mask_even_when_region_is_whole_image(self) -> None:
-        package = AdjustExposurePackage()
-        parsed = package.parse_params(
+    def test_mask_params_validation_allows_text_guided_mask_even_for_whole_image_requests(self) -> None:
+        parsed = MaskParams.model_validate(
             {
-                "op": "adjust_exposure",
-                "region": "whole_image",
-                "params": {
-                    "strength": 0.2,
-                        "mask_provider": "fal_sam3",
-                        "mask_prompt": "face skin",
-                    },
+                "mask_provider": "fal_sam3",
+                "mask_prompt": "face skin",
+            }
+        )
+        self.assertEqual(parsed.mask_prompt, "face skin")
+
+    def test_mask_params_validation_rejects_aliyun_mask_prompt(self) -> None:
+        with self.assertRaises(ValueError):
+            MaskParams.model_validate(
+                {
+                    "mask_provider": "aliyun",
+                    "mask_prompt": "face skin",
                 }
             )
 
-        self.assertIsNotNone(parsed)
-
-    def test_package_validation_rejects_aliyun_mask_prompt(self) -> None:
-        package = AdjustExposurePackage()
+    def test_mask_params_validation_rejects_unknown_extra_param(self) -> None:
         with self.assertRaises(ValueError):
-            package.parse_params(
+            MaskParams.model_validate(
                 {
-                    "op": "adjust_exposure",
-                    "region": "main_subject",
-                    "params": {
-                        "strength": 0.2,
-                        "mask_provider": "aliyun",
-                        "mask_prompt": "face skin",
-                    },
-                }
-            )
-
-    def test_package_validation_rejects_unknown_extra_param(self) -> None:
-        package = AdjustExposurePackage()
-        with self.assertRaises(ValueError):
-            package.parse_params(
-                {
-                    "op": "adjust_exposure",
-                    "region": "main_subject",
-                    "params": {
-                        "strength": 0.2,
-                        "mask_provider": "fal_sam3",
-                        "mask_prompt": "face skin",
-                        "unexpected_param": 123,
-                    },
+                    "mask_provider": "fal_sam3",
+                    "mask_prompt": "face skin",
+                    "unexpected_param": 123,
                 }
             )
 

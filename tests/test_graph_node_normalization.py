@@ -18,7 +18,7 @@ from app.graph.nodes.update_memory import update_memory
 class GraphNodeNormalizationTest(unittest.TestCase):
     """Verify node outputs are normalized through shared schemas."""
 
-    def test_load_context_normalizes_package_catalog_and_trace(self) -> None:
+    def test_load_context_normalizes_tool_catalog_and_trace(self) -> None:
         result = load_context(
             {
                 "request_text": "轻微提亮",
@@ -27,9 +27,9 @@ class GraphNodeNormalizationTest(unittest.TestCase):
             }
         )
 
-        self.assertTrue(result["package_catalog"])
+        self.assertTrue(result["tool_catalog"])
         self.assertEqual(result["execution_trace"][0]["stage"], "seed")
-        self.assertTrue(all("name" in item for item in result["package_catalog"]))
+        self.assertTrue(all("name" in item for item in result["tool_catalog"]))
 
     def test_parse_request_returns_valid_request_intent(self) -> None:
         from unittest.mock import patch
@@ -78,7 +78,7 @@ class GraphNodeNormalizationTest(unittest.TestCase):
             {
                 "memory_write_candidates": [
                     {
-                        "op": "adjust_highlights_shadows",
+                        "op": "adjust_contrast",
                         "error": "Skipped: segmentation returned no usable mask.",
                     }
                 ]

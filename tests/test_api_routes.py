@@ -25,7 +25,6 @@ class FakeGraph:
         return {
             "candidate_outputs": [str(output_path)],
             "selected_output": str(output_path),
-            "round_outputs": {"round_1": str(output_path)},
             "request_text": request_text,
             "edit_plan": {
                 "mode": payload.get("mode", "explicit"),
@@ -45,7 +44,6 @@ class FakeGraph:
                 "memory_candidates": [],
                 "needs_confirmation": False,
             },
-            "round_plans": {"round_1": {"operations": [{"op": "adjust_exposure"}]}},
             "eval_report": {
                 "selected_output": str(output_path),
                 "num_operations": 1,
@@ -63,29 +61,10 @@ class FakeGraph:
                 "should_continue_editing": False,
                 "should_request_review": False,
             },
-            "round_eval_reports": {
-                "round_1": {
-                    "selected_output": str(output_path),
-                    "num_operations": 1,
-                    "success_count": 1,
-                    "failure_count": 0,
-                    "fallback_count": 0,
-                    "has_output": True,
-                    "overall_ok": True,
-                    "preserve_ok": True,
-                    "style_ok": True,
-                    "artifact_ok": True,
-                    "issues": [],
-                    "warnings": [],
-                    "summary": "ok",
-                    "should_continue_editing": False,
-                    "should_request_review": False,
-                }
-            },
             "execution_trace": [
                 {
                     "index": 0,
-                    "stage": "round_1",
+                    "stage": "finish_output",
                     "op": "adjust_exposure",
                     "region": "whole_image",
                     "ok": True,
@@ -96,21 +75,75 @@ class FakeGraph:
                     "mask_path": None,
                 }
             ],
-            "round_execution_traces": {
-                "round_1": [
-                    {
-                        "index": 0,
-                        "stage": "round_1",
-                        "op": "adjust_exposure",
-                        "region": "whole_image",
-                        "ok": True,
-                        "fallback_used": False,
-                        "error": None,
-                        "output_image": str(output_path),
-                        "applied_params": {"strength": 0.2},
-                        "mask_path": None,
-                    }
-                ]
+            "phases": {
+                "finish_output": {
+                    "key": "finish_output",
+                    "label": "最终收尾",
+                    "plan": {
+                        "mode": payload.get("mode", "explicit"),
+                        "domain": "general",
+                        "executor": "deterministic",
+                        "preserve": [],
+                        "steps": [
+                            {
+                                "op": "adjust_exposure",
+                                "region": "whole_image",
+                                "params": {"strength": 0.2},
+                                "constraints": [],
+                                "priority": 0,
+                            }
+                        ],
+                        "step_budget": 4,
+                        "summary": "首轮基础校正完成。",
+                        "should_write_memory": False,
+                        "memory_candidates": [],
+                        "needs_confirmation": False,
+                    },
+                    "execution_trace": [
+                        {
+                            "index": 0,
+                            "stage": "finish_output",
+                            "op": "adjust_exposure",
+                            "region": "whole_image",
+                            "ok": True,
+                            "fallback_used": False,
+                            "error": None,
+                            "output_image": str(output_path),
+                            "applied_params": {"strength": 0.2},
+                            "mask_path": None,
+                        }
+                    ],
+                    "segmentation_trace": [],
+                    "eval_report": {
+                        "selected_output": str(output_path),
+                        "num_operations": 1,
+                        "success_count": 1,
+                        "failure_count": 0,
+                        "fallback_count": 0,
+                        "has_output": True,
+                        "overall_ok": True,
+                        "preserve_ok": True,
+                        "style_ok": True,
+                        "artifact_ok": True,
+                        "issues": [],
+                        "warnings": [],
+                        "summary": "ok",
+                        "should_continue_editing": False,
+                        "should_request_review": False,
+                    },
+                    "output": {"image_path": str(output_path)},
+                    "summary": {
+                        "stage": "finish_output",
+                        "summary": "最终收尾完成。",
+                        "used_tools": ["adjust_exposure"],
+                        "key_changes": ["adjust_exposure"],
+                        "remaining_issues": [],
+                    },
+                    "skipped": False,
+                    "skip_reason": None,
+                    "trigger_reasons": [],
+                    "stopped_early": False,
+                }
             },
             "approval_required": False,
         }
@@ -132,10 +165,10 @@ class FakeGraph:
         yield ("tasks", {"name": "analyze_image", "input": {"x": 1}, "triggers": ("start",)})
         yield ("updates", {"analyze_image": {"domain": "general"}})
         yield ("tasks", {"name": "analyze_image", "result": {"domain": "general"}, "error": None, "interrupts": []})
-        yield ("custom", {"event": "round_started", "stage": "execute_hybrid", "round": "round_1", "message": "开始执行 round_1"})
-        yield ("custom", {"event": "package_started", "stage": "execute_hybrid", "op": "adjust_exposure", "region": "main_subject", "message": "正在执行 adjust_exposure"})
-        yield ("custom", {"event": "package_finished", "stage": "execute_hybrid", "op": "adjust_exposure", "region": "main_subject", "ok": True, "message": "adjust_exposure 执行完成"})
-        yield ("custom", {"event": "round_completed", "stage": "execute_hybrid", "round": "round_1", "message": "round_1 执行完成"})
+        yield ("custom", {"event": "stage_started", "stage": "global_base", "round": "global_base", "message": "开始全局基线"})
+        yield ("custom", {"event": "package_started", "stage": "global_base", "op": "adjust_exposure", "region": "main_subject", "message": "正在执行 adjust_exposure"})
+        yield ("custom", {"event": "package_finished", "stage": "global_base", "op": "adjust_exposure", "region": "main_subject", "ok": True, "message": "adjust_exposure 执行完成"})
+        yield ("custom", {"event": "stage_completed", "stage": "global_base", "round": "global_base", "message": "全局基线已完成"})
 
     def get_state(self, config=None):
         output_path = str(self.output_dir / "fake_output.png")
@@ -156,7 +189,6 @@ class FakeGraph:
         snapshot.values = {
             "candidate_outputs": [output_path],
             "selected_output": output_path,
-            "round_outputs": {"round_1": output_path},
             "request_text": request_text,
             "edit_plan": {
                 "mode": "explicit",
@@ -176,7 +208,6 @@ class FakeGraph:
                 "memory_candidates": [],
                 "needs_confirmation": False,
             },
-            "round_plans": {"round_1": {"operations": [{"op": "adjust_exposure"}]}},
             "eval_report": {
                 "selected_output": output_path,
                 "num_operations": 1,
@@ -194,29 +225,10 @@ class FakeGraph:
                 "should_continue_editing": False,
                 "should_request_review": False,
             },
-            "round_eval_reports": {
-                "round_1": {
-                    "selected_output": output_path,
-                    "num_operations": 1,
-                    "success_count": 1,
-                    "failure_count": 0,
-                    "fallback_count": 0,
-                    "has_output": True,
-                    "overall_ok": True,
-                    "preserve_ok": True,
-                    "style_ok": True,
-                    "artifact_ok": True,
-                    "issues": [],
-                    "warnings": [],
-                    "summary": "ok",
-                    "should_continue_editing": False,
-                    "should_request_review": False,
-                }
-            },
             "execution_trace": [
                 {
                     "index": 0,
-                    "stage": "round_1",
+                    "stage": "finish_output",
                     "op": "adjust_exposure",
                     "region": "main_subject",
                     "ok": True,
@@ -227,21 +239,75 @@ class FakeGraph:
                     "mask_path": None,
                 }
             ],
-            "round_execution_traces": {
-                "round_1": [
-                    {
-                        "index": 0,
-                        "stage": "round_1",
-                        "op": "adjust_exposure",
-                        "region": "main_subject",
-                        "ok": True,
-                        "fallback_used": False,
-                        "error": None,
-                        "output_image": output_path,
-                        "applied_params": {"strength": 0.2},
-                        "mask_path": None,
-                    }
-                ]
+            "phases": {
+                "finish_output": {
+                    "key": "finish_output",
+                    "label": "最终收尾",
+                    "plan": {
+                        "mode": "explicit",
+                        "domain": "general",
+                        "executor": "hybrid",
+                        "preserve": [],
+                        "steps": [
+                            {
+                                "op": "adjust_exposure",
+                                "region": "main_subject",
+                                "params": {"strength": 0.2},
+                                "constraints": [],
+                                "priority": 0,
+                            }
+                        ],
+                        "step_budget": 4,
+                        "summary": "首轮基础校正完成。",
+                        "should_write_memory": False,
+                        "memory_candidates": [],
+                        "needs_confirmation": False,
+                    },
+                    "execution_trace": [
+                        {
+                            "index": 0,
+                            "stage": "finish_output",
+                            "op": "adjust_exposure",
+                            "region": "main_subject",
+                            "ok": True,
+                            "fallback_used": False,
+                            "error": None,
+                            "output_image": output_path,
+                            "applied_params": {"strength": 0.2},
+                            "mask_path": None,
+                        }
+                    ],
+                    "segmentation_trace": [],
+                    "eval_report": {
+                        "selected_output": output_path,
+                        "num_operations": 1,
+                        "success_count": 1,
+                        "failure_count": 0,
+                        "fallback_count": 0,
+                        "has_output": True,
+                        "overall_ok": True,
+                        "preserve_ok": True,
+                        "style_ok": True,
+                        "artifact_ok": True,
+                        "issues": [],
+                        "warnings": [],
+                        "summary": "ok",
+                        "should_continue_editing": False,
+                        "should_request_review": False,
+                    },
+                    "output": {"image_path": output_path},
+                    "summary": {
+                        "stage": "finish_output",
+                        "summary": "最终收尾完成。",
+                        "used_tools": ["adjust_exposure"],
+                        "key_changes": ["adjust_exposure"],
+                        "remaining_issues": [],
+                    },
+                    "skipped": False,
+                    "skip_reason": None,
+                    "trigger_reasons": [],
+                    "stopped_early": False,
+                }
             },
             "approval_required": False,
             "approval_payload": None,
@@ -255,11 +321,11 @@ class ApiRoutesTest(unittest.TestCase):
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
 
-        from app.api.deps import get_asset_store, get_graph_app, get_job_store, get_package_registry
+        from app.api.deps import get_asset_store, get_graph_app, get_job_store, get_tool_registry
         from app.main import create_app
         from app.services.asset_store import AssetStore
         from app.services.job_store import JobStore
-        from app.tools.packages import build_default_package_registry
+        from app.tools.tool_registry import build_default_tool_registry
 
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
@@ -267,13 +333,13 @@ class ApiRoutesTest(unittest.TestCase):
         self.job_store = JobStore()
         self.fake_graph = FakeGraph(self.root / "graph_outputs")
         self.fake_graph.output_dir.mkdir(parents=True, exist_ok=True)
-        self.registry = build_default_package_registry()
+        self.registry = build_default_tool_registry()
 
         self.app = create_app()
         self.app.dependency_overrides[get_asset_store] = lambda: self.asset_store
         self.app.dependency_overrides[get_job_store] = lambda: self.job_store
         self.app.dependency_overrides[get_graph_app] = lambda: self.fake_graph
-        self.app.dependency_overrides[get_package_registry] = lambda: self.registry
+        self.app.dependency_overrides[get_tool_registry] = lambda: self.registry
         self.client = TestClient(self.app)
 
     def tearDown(self) -> None:
@@ -284,7 +350,7 @@ class ApiRoutesTest(unittest.TestCase):
         Image.new("RGB", (96, 96), color).save(buf, format="PNG")
         return buf.getvalue()
 
-    def test_health_and_package_catalog(self) -> None:
+    def test_health_and_tool_catalog(self) -> None:
         health = self.client.get("/health")
         self.assertEqual(health.status_code, 200)
         self.assertTrue(health.json()["ok"])
@@ -293,8 +359,10 @@ class ApiRoutesTest(unittest.TestCase):
         self.assertEqual(catalog.status_code, 200)
         self.assertTrue(catalog.json()["items"])
         package_names = {item["name"] for item in catalog.json()["items"]}
-        self.assertIn("adjust_color_mixer", package_names)
-        self.assertIn("adjust_dehaze", package_names)
+        self.assertEqual(
+            package_names,
+            {"adjust_exposure", "adjust_contrast", "adjust_vibrance_saturation"},
+        )
 
     def test_upload_edit_and_job_polling(self) -> None:
         upload = self.client.post(
@@ -322,15 +390,14 @@ class ApiRoutesTest(unittest.TestCase):
         self.assertEqual(payload["job"]["status"], "completed")
         self.assertIsNotNone(payload["selected_output"])
         self.assertEqual(len(payload["candidate_outputs"]), 1)
-        self.assertIn("round_1", payload["round_outputs"])
-        self.assertIn("round_1", payload["round_plans"])
-        self.assertIn("round_1", payload["round_eval_reports"])
+        self.assertIn("finish_output", payload["phases"])
+        self.assertIn("plan", payload["phases"]["finish_output"])
 
         job_id = payload["job"]["job_id"]
         job = self.client.get(f"/jobs/{job_id}")
         self.assertEqual(job.status_code, 200)
         self.assertEqual(job.json()["job"]["job_id"], job_id)
-        self.assertIn("round_1", job.json()["round_outputs"])
+        self.assertIn("finish_output", job.json()["phases"])
         self.assertIn("stage_timings", job.json())
 
         feedback = self.client.post(
@@ -429,9 +496,9 @@ class ApiRoutesTest(unittest.TestCase):
 
         self.assertIn("event: job_created", body)
         self.assertIn("event: node_started", body)
-        self.assertIn("event: round_started", body)
+        self.assertIn("event: stage_started", body)
         self.assertIn("event: package_started", body)
-        self.assertIn("event: round_completed", body)
+        self.assertIn("event: stage_completed", body)
         self.assertIn("event: job_completed", body)
 
     def test_resume_review_placeholder(self) -> None:

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.graph.state import AnalyzeImageResult, EditPlan, ExecutionTraceItem, PreferenceMemory, RequestIntent, ToolCatalogItem
 from app.services.planner_param_codec import planner_param_spec
-from app.tools.packages.base import MASK_PARAM_KEYS
+from app.tools.tool_specs import MASK_PARAM_KEYS, MASK_PARAMS_SCHEMA
 
 
 _BOUND_KEYS = (
@@ -73,13 +74,20 @@ def _compact_param_spec(spec: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
-def compact_request_intent_for_model(request_intent: dict[str, Any] | None) -> dict[str, Any]:
+def compact_request_intent_for_model(request_intent: RequestIntent | dict[str, Any] | None) -> dict[str, Any]:
     """Build a compact request-intent summary for model consumption."""
 
-    payload = dict(request_intent or {})
+    if isinstance(request_intent, RequestIntent):
+        payload = request_intent.model_dump(mode="json")
+    else:
+        payload = dict(request_intent or {})
     compact: dict[str, Any] = {
         "mode": payload.get("mode"),
         "constraints": payload.get("constraints", []),
+        "goal_summary": payload.get("goal_summary"),
+        "wants_repair": payload.get("wants_repair"),
+        "wants_style": payload.get("wants_style"),
+        "requires_local_editing": payload.get("requires_local_editing"),
     }
 
     requested_packages = []
@@ -96,10 +104,13 @@ def compact_request_intent_for_model(request_intent: dict[str, Any] | None) -> d
     return compact
 
 
-def compact_image_analysis_for_model(image_analysis: dict[str, Any] | None) -> dict[str, Any]:
+def compact_image_analysis_for_model(image_analysis: AnalyzeImageResult | dict[str, Any] | None) -> dict[str, Any]:
     """Build a compact image-analysis summary for model consumption."""
 
-    payload = dict(image_analysis or {})
+    if isinstance(image_analysis, AnalyzeImageResult):
+        payload = image_analysis.model_dump(mode="json")
+    else:
+        payload = dict(image_analysis or {})
     metrics = dict(payload.get("metrics") or {})
     compact_metrics = {
         key: metrics[key]
@@ -111,35 +122,46 @@ def compact_image_analysis_for_model(image_analysis: dict[str, Any] | None) -> d
         "summary": payload.get("summary"),
         "scene_tags": payload.get("scene_tags", []),
         "issues": payload.get("issues", []),
+        "main_issues": payload.get("main_issues", []),
         "subjects": payload.get("subjects", []),
+        "primary_subject": payload.get("primary_subject"),
         "segmentation_hints": payload.get("segmentation_hints", []),
+        "has_portrait": payload.get("has_portrait"),
+        "needs_local_editing": payload.get("needs_local_editing"),
+        "has_background_distraction": payload.get("has_background_distraction"),
     }
     if compact_metrics:
         compact["metrics"] = compact_metrics
     return compact
 
 
-def compact_preferences_for_model(retrieved_prefs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def compact_preferences_for_model(
+    retrieved_prefs: list[PreferenceMemory | dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
     """Build a compact preference list for model consumption."""
 
     compact_items: list[dict[str, Any]] = []
     for item in retrieved_prefs or []:
+        payload = item.model_dump(mode="json") if isinstance(item, PreferenceMemory) else item
         compact_item = {
-            "key": item.get("key"),
-            "value": item.get("value"),
+            "key": payload.get("key"),
+            "value": payload.get("value"),
         }
-        if item.get("confidence") is not None:
-            compact_item["confidence"] = item.get("confidence")
-        if item.get("source") is not None:
-            compact_item["source"] = item.get("source")
+        if payload.get("confidence") is not None:
+            compact_item["confidence"] = payload.get("confidence")
+        if payload.get("source") is not None:
+            compact_item["source"] = payload.get("source")
         compact_items.append(compact_item)
     return compact_items
 
 
-def compact_plan_for_model(plan: dict[str, Any] | None) -> dict[str, Any]:
+def compact_plan_for_model(plan: EditPlan | dict[str, Any] | None) -> dict[str, Any]:
     """Build a compact plan summary for model consumption."""
 
-    payload = dict(plan or {})
+    if isinstance(plan, EditPlan):
+        payload = plan.model_dump(mode="json")
+    else:
+        payload = dict(plan or {})
     operations = []
     for item in payload.get("operations", []) or []:
         operations.append(
@@ -157,23 +179,26 @@ def compact_plan_for_model(plan: dict[str, Any] | None) -> dict[str, Any]:
     return compact
 
 
-def compact_execution_trace_for_model(execution_trace: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def compact_execution_trace_for_model(
+    execution_trace: list[ExecutionTraceItem | dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
     """Build a compact execution trace summary for model consumption."""
 
     compact_items: list[dict[str, Any]] = []
     for item in execution_trace or []:
+        payload = item.model_dump(mode="json") if isinstance(item, ExecutionTraceItem) else item
         compact_item: dict[str, Any] = {
-            "op": item.get("op"),
-            "region": item.get("region"),
-            "ok": item.get("ok"),
+            "op": payload.get("op"),
+            "region": payload.get("region"),
+            "ok": payload.get("ok"),
         }
 
-        if item.get("fallback_used"):
-            compact_item["fallback_used"] = item.get("fallback_used")
-        if item.get("error"):
-            compact_item["error"] = item.get("error")
+        if payload.get("fallback_used"):
+            compact_item["fallback_used"] = payload.get("fallback_used")
+        if payload.get("error"):
+            compact_item["error"] = payload.get("error")
 
-        applied_params = item.get("applied_params")
+        applied_params = payload.get("applied_params")
         if isinstance(applied_params, dict):
             source_params = applied_params.get("params") if isinstance(applied_params.get("params"), dict) else applied_params
             compact_params: dict[str, Any] = {}
@@ -191,61 +216,66 @@ def compact_execution_trace_for_model(execution_trace: list[dict[str, Any]] | No
     return compact_items
 
 
-def shared_mask_params_for_model(package_catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def shared_mask_params_for_model(
+    tool_catalog: list[ToolCatalogItem | dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Extract shared mask param definitions once for planner context."""
 
-    for item in package_catalog:
-        schema = item.get("params_schema") or {}
-        properties = schema.get("properties") if isinstance(schema, dict) else {}
-        if not isinstance(properties, dict):
+    supports_mask = False
+    for item in tool_catalog:
+        payload = item.model_dump(mode="json") if isinstance(item, ToolCatalogItem) else item
+        if payload.get("supports_mask") or payload.get("mask_policy") in {"optional", "required"}:
+            supports_mask = True
+            break
+    if not supports_mask:
+        return []
+
+    properties = MASK_PARAMS_SCHEMA.get("properties", {})
+    if not isinstance(properties, dict):
+        return []
+
+    shared_params: list[dict[str, Any]] = []
+    for param_name, spec in properties.items():
+        if param_name not in MASK_PARAM_KEYS or not isinstance(spec, dict):
             continue
-
-        shared_params: list[dict[str, Any]] = []
-        for param_name in properties:
-            if param_name not in MASK_PARAM_KEYS:
-                continue
-            spec = properties[param_name]
-            if not isinstance(spec, dict):
-                continue
-            compact_param = {"name": param_name}
-            compact_param.update(_compact_param_spec(spec))
-            shared_params.append(compact_param)
-
-        if shared_params:
-            return shared_params
-
-    return []
+        compact_param = {"name": param_name}
+        compact_param.update(_compact_param_spec(spec))
+        shared_params.append(compact_param)
+    return shared_params
 
 
-def compact_package_catalog_for_model(
-    package_catalog: list[dict[str, Any]],
+def compact_tool_catalog_for_model(
+    tool_catalog: list[ToolCatalogItem | dict[str, Any]],
     *,
     include_params: bool,
 ) -> list[dict[str, Any]]:
     """Build a compact tool catalog tailored for model consumption."""
 
     compact_items: list[dict[str, Any]] = []
-    for item in package_catalog:
+    for item in tool_catalog:
+        payload = item.model_dump(mode="json") if isinstance(item, ToolCatalogItem) else item
         compact_item: dict[str, Any] = {
-            "name": item.get("name"),
-            "description": item.get("description"),
-            "execution_modes": item.get("supported_regions", []),
+            "name": payload.get("name"),
+            "label": payload.get("label"),
+            "description": payload.get("description"),
+            "family": payload.get("family"),
+            "execution_modes": payload.get("supported_regions", []),
         }
 
-        mask_policy = item.get("mask_policy")
+        mask_policy = payload.get("mask_policy")
         if mask_policy and mask_policy != "none":
             compact_item["mask_policy"] = mask_policy
 
-        risk_level = item.get("risk_level")
+        risk_level = payload.get("risk_level")
         if risk_level:
             compact_item["risk_level"] = risk_level
 
-        supported_domains = item.get("supported_domains") or []
+        supported_domains = payload.get("supported_domains") or []
         if supported_domains:
             compact_item["supported_domains"] = supported_domains
 
         if include_params:
-            schema = item.get("params_schema") or {}
+            schema = payload.get("planner_schema") or payload.get("params_schema") or {}
             properties = schema.get("properties") if isinstance(schema, dict) else {}
             required = set(schema.get("required", [])) if isinstance(schema, dict) else set()
             compact_params: list[dict[str, Any]] = []
@@ -263,6 +293,8 @@ def compact_package_catalog_for_model(
                     compact_params.append(compact_param)
 
             compact_item["params"] = compact_params
+            if payload.get("primary_param"):
+                compact_item["primary_param"] = payload["primary_param"]
 
         compact_items.append(compact_item)
 

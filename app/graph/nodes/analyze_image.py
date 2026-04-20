@@ -63,6 +63,11 @@ def _compute_basic_image_analysis(image_path: str) -> dict[str, Any]:
         "issues": issues,
         "subjects": ["primary visible subject"],
         "segmentation_hints": ["primary visible subject"],
+        "main_issues": list(issues),
+        "primary_subject": "primary visible subject",
+        "has_portrait": None,
+        "needs_local_editing": bool(issues),
+        "has_background_distraction": False,
         "summary": summary,
         "metrics": {
             "brightness_mean": brightness_mean,
@@ -118,6 +123,13 @@ def analyze_image(state: EditState) -> dict:
             for key in ("domain", "scene_tags", "issues", "subjects", "segmentation_hints", "summary"):
                 if key in model_analysis:
                     merged_analysis[key] = model_analysis[key]
+            merged_analysis["main_issues"] = list(model_analysis.get("main_issues") or merged_analysis.get("issues") or [])
+            merged_analysis["primary_subject"] = model_analysis.get("primary_subject") or (
+                (merged_analysis.get("subjects") or [None])[0]
+            )
+            merged_analysis["has_portrait"] = model_analysis.get("has_portrait")
+            merged_analysis["needs_local_editing"] = model_analysis.get("needs_local_editing")
+            merged_analysis["has_background_distraction"] = model_analysis.get("has_background_distraction")
             merged_analysis["model_analysis"] = model_analysis
             validated = AnalyzeImageResult.model_validate(merged_analysis)
             return {"image_analysis": validated.model_dump(mode="json")}

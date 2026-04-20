@@ -22,6 +22,11 @@
   "issues": ["..."],
   "subjects": ["..."],
   "segmentation_hints": ["whole_image|动态区域描述"],
+  "main_issues": ["..."],
+  "primary_subject": "主要主体",
+  "has_portrait": true,
+  "needs_local_editing": true,
+  "has_background_distraction": false,
   "summary": "中文简短总结"
 }
 
@@ -32,5 +37,8 @@
 4. `segmentation_hints` 写对后续局部修图真正有帮助的区域提示。
 5. 如果图中有主体，请自然关注最影响结果的主体区域与高风险区域。
 6. 看不清的内容不要强行判断。
-7. `summary` 用中文，简短说明当前图片状态。
-8. 只返回 JSON。
+7. `main_issues` 只保留最影响后续修图决策的 1 到 3 个问题。
+8. `primary_subject` 只写图中真实可见的主要主体。
+9. `has_portrait`、`needs_local_editing`、`has_background_distraction` 都要基于画面真实内容判断。
+10. `summary` 用中文，简短说明当前图片状态。
+11. 只返回 JSON。

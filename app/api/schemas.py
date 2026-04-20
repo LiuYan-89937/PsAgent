@@ -5,7 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.graph.state import (
+    EditPlan,
+    ErrorDetail,
+    EvaluationReport,
+    FallbackTraceItem,
+    FeedbackItem,
+    JobEvent,
+    PlannerExecutionPlan,
+    SegmentationTraceItem,
+    StageSummary,
+)
 
 
 JobStatus = Literal["pending", "running", "completed", "failed", "review_required"]
@@ -60,7 +72,7 @@ class JobSummaryResponse(BaseModel):
     current_stage: str | None = None
     current_message: str | None = None
     error: str | None = None
-    error_detail: dict[str, Any] | None = None
+    error_detail: ErrorDetail | None = None
 
 
 class StageTimingResponse(BaseModel):
@@ -75,23 +87,55 @@ class StageTimingResponse(BaseModel):
     status: Literal["completed", "failed"]
 
 
+class ExecutionTraceResponse(BaseModel):
+    """Frontend-facing execution trace item."""
+
+    model_config = ConfigDict(extra="allow")
+
+    index: int | None = None
+    stage: str | None = None
+    op: str | None = None
+    region: str | None = None
+    ok: bool
+    fallback_used: bool = False
+    error: str | None = None
+    output_image: str | None = None
+    output_asset_id: str | None = None
+    output_asset: AssetResponse | None = None
+    applied_params: dict[str, Any] = Field(default_factory=dict)
+    mask_path: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
+
+
+class PhaseResponse(BaseModel):
+    """Frontend-facing grouped phase payload."""
+
+    plan: PlannerExecutionPlan | None = None
+    execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
+    segmentation_trace: list[SegmentationTraceItem] = Field(default_factory=list)
+    eval_report: EvaluationReport | None = None
+    output: AssetResponse | None = None
+    summary: StageSummary | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
+    trigger_reasons: list[str] = Field(default_factory=list)
+    stopped_early: bool = False
+
+
 class EditResponse(BaseModel):
     """Edit route response."""
 
     job: JobSummaryResponse
     selected_output: AssetResponse | None = None
     candidate_outputs: list[AssetResponse] = Field(default_factory=list)
-    edit_plan: dict[str, Any] | None = None
-    eval_report: dict[str, Any] | None = None
-    execution_trace: list[dict[str, Any]] = Field(default_factory=list)
-    segmentation_trace: list[dict[str, Any]] = Field(default_factory=list)
-    fallback_trace: list[dict[str, Any]] = Field(default_factory=list)
-    round_outputs: dict[str, AssetResponse | None] = Field(default_factory=dict)
-    round_plans: dict[str, Any] = Field(default_factory=dict)
-    round_eval_reports: dict[str, Any] = Field(default_factory=dict)
-    round_execution_traces: dict[str, Any] = Field(default_factory=dict)
-    round_segmentation_traces: dict[str, Any] = Field(default_factory=dict)
-    events: list[dict[str, Any]] = Field(default_factory=list)
+    edit_plan: EditPlan | None = None
+    eval_report: EvaluationReport | None = None
+    execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
+    segmentation_trace: list[SegmentationTraceItem] = Field(default_factory=list)
+    fallback_trace: list[FallbackTraceItem] = Field(default_factory=list)
+    phases: dict[str, PhaseResponse] = Field(default_factory=dict)
+    events: list[JobEvent] = Field(default_factory=list)
     stage_timings: list[StageTimingResponse] = Field(default_factory=list)
 
 
@@ -102,19 +146,15 @@ class JobDetailResponse(BaseModel):
     input_assets: list[AssetResponse] = Field(default_factory=list)
     selected_output: AssetResponse | None = None
     candidate_outputs: list[AssetResponse] = Field(default_factory=list)
-    edit_plan: dict[str, Any] | None = None
-    eval_report: dict[str, Any] | None = None
-    execution_trace: list[dict[str, Any]] = Field(default_factory=list)
-    segmentation_trace: list[dict[str, Any]] = Field(default_factory=list)
-    fallback_trace: list[dict[str, Any]] = Field(default_factory=list)
-    round_outputs: dict[str, AssetResponse | None] = Field(default_factory=dict)
-    round_plans: dict[str, Any] = Field(default_factory=dict)
-    round_eval_reports: dict[str, Any] = Field(default_factory=dict)
-    round_execution_traces: dict[str, Any] = Field(default_factory=dict)
-    round_segmentation_traces: dict[str, Any] = Field(default_factory=dict)
-    events: list[dict[str, Any]] = Field(default_factory=list)
+    edit_plan: EditPlan | None = None
+    eval_report: EvaluationReport | None = None
+    execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
+    segmentation_trace: list[SegmentationTraceItem] = Field(default_factory=list)
+    fallback_trace: list[FallbackTraceItem] = Field(default_factory=list)
+    phases: dict[str, PhaseResponse] = Field(default_factory=dict)
+    events: list[JobEvent] = Field(default_factory=list)
     stage_timings: list[StageTimingResponse] = Field(default_factory=list)
-    feedback: list[dict[str, Any]] = Field(default_factory=list)
+    feedback: list[FeedbackItem] = Field(default_factory=list)
 
 
 class FeedbackRequest(BaseModel):
@@ -157,8 +197,8 @@ class ResumeReviewResponse(BaseModel):
     message: str
 
 
-class PackageCatalogResponse(BaseModel):
-    """Planner-facing package catalog response."""
+class ToolCatalogResponse(BaseModel):
+    """Planner-facing tool catalog response."""
 
     items: list[dict[str, Any]] = Field(default_factory=list)
 
