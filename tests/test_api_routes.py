@@ -9,6 +9,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from app.tools import export_tool_catalog
+
 
 class FakeGraph:
     """Minimal fake graph used for API route tests."""
@@ -321,11 +323,11 @@ class ApiRoutesTest(unittest.TestCase):
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
 
-        from app.api.deps import get_asset_store, get_graph_app, get_job_store, get_tool_registry
+        from app.api.deps import get_asset_store, get_graph_app, get_job_store, get_tool_catalog
         from app.main import create_app
         from app.services.asset_store import AssetStore
         from app.services.job_store import JobStore
-        from app.tools.tool_registry import build_default_tool_registry
+        from app.tools import export_tool_catalog
 
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
@@ -333,13 +335,13 @@ class ApiRoutesTest(unittest.TestCase):
         self.job_store = JobStore()
         self.fake_graph = FakeGraph(self.root / "graph_outputs")
         self.fake_graph.output_dir.mkdir(parents=True, exist_ok=True)
-        self.registry = build_default_tool_registry()
+        self.tool_catalog = tuple(export_tool_catalog())
 
         self.app = create_app()
         self.app.dependency_overrides[get_asset_store] = lambda: self.asset_store
         self.app.dependency_overrides[get_job_store] = lambda: self.job_store
         self.app.dependency_overrides[get_graph_app] = lambda: self.fake_graph
-        self.app.dependency_overrides[get_tool_registry] = lambda: self.registry
+        self.app.dependency_overrides[get_tool_catalog] = lambda: self.tool_catalog
         self.client = TestClient(self.app)
 
     def tearDown(self) -> None:
@@ -355,14 +357,15 @@ class ApiRoutesTest(unittest.TestCase):
         self.assertEqual(health.status_code, 200)
         self.assertTrue(health.json()["ok"])
 
-        catalog = self.client.get("/meta/packages")
+        catalog = self.client.get("/meta/tools")
         self.assertEqual(catalog.status_code, 200)
         self.assertTrue(catalog.json()["items"])
         package_names = {item["name"] for item in catalog.json()["items"]}
-        self.assertEqual(
-            package_names,
-            {"adjust_exposure", "adjust_contrast", "adjust_vibrance_saturation"},
-        )
+        self.assertEqual(package_names, {item["name"] for item in export_tool_catalog()})
+
+        legacy_catalog = self.client.get("/meta/packages")
+        self.assertEqual(legacy_catalog.status_code, 200)
+        self.assertTrue(legacy_catalog.json()["items"])
 
     def test_upload_edit_and_job_polling(self) -> None:
         upload = self.client.post(

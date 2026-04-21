@@ -59,7 +59,7 @@ class ParseRequestNodeTest(unittest.TestCase):
 
     def test_parse_request_marks_layered_repair_and_style_constraints(self) -> None:
         state = {
-            "request_text": "夏日质感，修复逆光，自然一点",
+            "request_text": "胶片质感，修复逆光，自然一点",
             "tool_catalog": [],
         }
 
@@ -69,10 +69,9 @@ class ParseRequestNodeTest(unittest.TestCase):
         constraints = set(result["request_intent"]["constraints"])
         requested_ops = {item["op"] for item in result["request_intent"]["requested_packages"]}
         self.assertIn("repair_backlighting", constraints)
-        self.assertIn("build_summer_mood", constraints)
         self.assertIn("needs_layered_refinement", constraints)
+        self.assertTrue(result["request_intent"]["wants_style"])
         self.assertIn("adjust_exposure", requested_ops)
-        self.assertIn("adjust_vibrance_saturation", requested_ops)
 
     def test_parse_request_model_uses_compact_tool_catalog(self) -> None:
         with patch(

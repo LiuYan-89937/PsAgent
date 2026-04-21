@@ -13,14 +13,14 @@ from app.services.model_context import (
     compact_tool_catalog_for_model,
     shared_mask_params_for_model,
 )
-from app.tools.tool_registry import build_default_tool_registry
+from app.tools import export_tool_catalog
 
 
 class ModelContextTest(unittest.TestCase):
     """Verify compact model payload helpers."""
 
     def test_compact_tool_catalog_reduces_payload_size(self) -> None:
-        full_catalog = build_default_tool_registry().export_catalog()
+        full_catalog = export_tool_catalog()
 
         full_json = json.dumps(full_catalog, ensure_ascii=False)
         compact_json = json.dumps(
@@ -31,7 +31,7 @@ class ModelContextTest(unittest.TestCase):
         self.assertLess(len(compact_json), len(full_json))
 
     def test_compact_tool_catalog_preserves_core_param_info(self) -> None:
-        full_catalog = build_default_tool_registry().export_catalog()
+        full_catalog = export_tool_catalog()
         compact_catalog = compact_tool_catalog_for_model(full_catalog, include_params=True)
 
         exposure = next(item for item in compact_catalog if item["name"] == "adjust_exposure")
@@ -45,14 +45,14 @@ class ModelContextTest(unittest.TestCase):
         self.assertIn("仅填 0-100 整数", strength["description"])
 
     def test_parse_request_compact_catalog_omits_param_details(self) -> None:
-        full_catalog = build_default_tool_registry().export_catalog()
+        full_catalog = export_tool_catalog()
         compact_catalog = compact_tool_catalog_for_model(full_catalog, include_params=False)
 
         exposure = next(item for item in compact_catalog if item["name"] == "adjust_exposure")
         self.assertNotIn("params", exposure)
 
     def test_planner_compact_catalog_omits_repeated_mask_params(self) -> None:
-        full_catalog = build_default_tool_registry().export_catalog()
+        full_catalog = export_tool_catalog()
         compact_catalog = compact_tool_catalog_for_model(full_catalog, include_params=True)
         exposure = next(item for item in compact_catalog if item["name"] == "adjust_exposure")
         param_names = {item["name"] for item in exposure["params"]}
@@ -62,7 +62,7 @@ class ModelContextTest(unittest.TestCase):
         self.assertNotIn("mask_provider", param_names)
 
     def test_shared_mask_params_for_model_extracts_common_mask_schema(self) -> None:
-        full_catalog = build_default_tool_registry().export_catalog()
+        full_catalog = export_tool_catalog()
         shared_params = shared_mask_params_for_model(full_catalog)
         param_names = {item["name"] for item in shared_params}
 

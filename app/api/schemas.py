@@ -197,10 +197,95 @@ class ResumeReviewResponse(BaseModel):
     message: str
 
 
+class ToolCatalogItemResponse(BaseModel):
+    """Planner-facing tool catalog item."""
+
+    name: str
+    label: str | None = None
+    description: str
+    family: str | None = None
+    stage_affinity: list[str] = Field(default_factory=list)
+    supports_mask: bool | None = None
+    requires_mask: bool | None = None
+    supports_whole_image: bool | None = None
+    recommended_mask_prompt: str | None = None
+    default_params: dict[str, Any] = Field(default_factory=dict)
+    planner_schema: dict[str, Any] = Field(default_factory=dict)
+    primary_param: str | None = None
+    supported_regions: list[str] = Field(default_factory=list)
+    mask_policy: Literal["none", "optional", "required"]
+    supported_domains: list[str] = Field(default_factory=list)
+    risk_level: Literal["low", "medium", "high"]
+    params_schema: dict[str, Any] = Field(default_factory=dict)
+
+
 class ToolCatalogResponse(BaseModel):
     """Planner-facing tool catalog response."""
 
-    items: list[dict[str, Any]] = Field(default_factory=list)
+    items: list[ToolCatalogItemResponse] = Field(default_factory=list)
+
+
+class ToolLabMaskRequest(BaseModel):
+    """Request payload for generating a debug/test mask from one uploaded image."""
+
+    input_asset_id: str
+    prompt: str = Field(min_length=1, max_length=120)
+    provider: Literal["auto", "aliyun", "fal_sam3"] = "fal_sam3"
+
+
+class ToolLabMaskResponse(BaseModel):
+    """Response payload for one generated tool-lab mask."""
+
+    mask_asset: AssetResponse
+    preview_asset: AssetResponse | None = None
+    provider: str
+    requested_provider: str | None = None
+    prompt: str
+    effective_prompt: str | None = None
+    fallback_used: bool = False
+    attempt_strategy: str | None = None
+    attempt_index: int | None = None
+    target_label: str | None = None
+    revert_mask: bool | None = None
+
+
+class ToolLabStepRequest(BaseModel):
+    """One sequential deterministic tool step configured from the frontend."""
+
+    tool_name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    mask_asset_id: str | None = None
+
+
+class ToolLabStepResultResponse(BaseModel):
+    """One executed tool-lab step with before/after assets for comparison."""
+
+    index: int
+    tool_name: str
+    ok: bool
+    input_asset: AssetResponse
+    output_asset: AssetResponse | None = None
+    mask_asset: AssetResponse | None = None
+    applied_params: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
+    fallback_used: bool = False
+    error: str | None = None
+
+
+class ToolLabRunRequest(BaseModel):
+    """Request payload for sequentially running a custom tool chain."""
+
+    input_asset_id: str
+    steps: list[ToolLabStepRequest] = Field(default_factory=list)
+
+
+class ToolLabRunResponse(BaseModel):
+    """Response payload for one completed tool-lab execution."""
+
+    input_asset: AssetResponse
+    final_output_asset: AssetResponse
+    steps: list[ToolLabStepResultResponse] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

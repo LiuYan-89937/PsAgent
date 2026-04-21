@@ -282,7 +282,9 @@ export interface ToolCatalogItem {
   family?: string
   stage_affinity?: string[]
   supports_mask?: boolean
+  requires_mask?: boolean
   supports_whole_image?: boolean
+  recommended_mask_prompt?: string | null
   default_params?: Record<string, unknown>
   planner_schema?: Record<string, unknown>
   primary_param?: string
@@ -295,6 +297,57 @@ export interface ToolCatalogItem {
 
 export interface ToolCatalogResponse {
   items: ToolCatalogItem[]
+}
+
+export interface ToolLabMaskRequest {
+  input_asset_id: string
+  prompt: string
+  provider?: 'auto' | 'aliyun' | 'fal_sam3'
+}
+
+export interface ToolLabMaskResponse {
+  mask_asset: AssetResponse
+  preview_asset?: AssetResponse | null
+  provider: string
+  requested_provider?: string | null
+  prompt: string
+  effective_prompt?: string | null
+  fallback_used: boolean
+  attempt_strategy?: string | null
+  attempt_index?: number | null
+  target_label?: string | null
+  revert_mask?: boolean | null
+}
+
+export interface ToolLabStepRequest {
+  tool_name: string
+  params: Record<string, unknown>
+  mask_asset_id?: string | null
+}
+
+export interface ToolLabStepResultResponse {
+  index: number
+  tool_name: string
+  ok: boolean
+  input_asset: AssetResponse
+  output_asset?: AssetResponse | null
+  mask_asset?: AssetResponse | null
+  applied_params: Record<string, unknown>
+  warnings: string[]
+  artifacts: Record<string, unknown>
+  fallback_used: boolean
+  error?: string | null
+}
+
+export interface ToolLabRunRequest {
+  input_asset_id: string
+  steps: ToolLabStepRequest[]
+}
+
+export interface ToolLabRunResponse {
+  input_asset: AssetResponse
+  final_output_asset: AssetResponse
+  steps: ToolLabStepResultResponse[]
 }
 
 export interface SseEventPayload {

@@ -8,10 +8,13 @@ import PromptInput from '@/components/PromptInput.vue'
 import ProcessViewer from '@/components/ProcessViewer.vue'
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import ResultViewer from '@/components/ResultViewer.vue'
+import ToolLabWorkbench from '@/components/ToolLabWorkbench.vue'
 
 type AppState = 'idle' | 'ready' | 'processing' | 'review_required' | 'completed' | 'fatal_error'
+type ViewMode = 'agent' | 'tool_lab'
 
 const currentState = ref<AppState>('idle')
+const viewMode = ref<ViewMode>('agent')
 const currentAsset = ref<AssetResponse | null>(null)
 const currentJobId = ref<string | null>(null)
 const sseEvents = ref<SseEventPayload[]>([])
@@ -262,11 +265,17 @@ onBeforeUnmount(() => {
 <template>
   <main class="app-layout">
     <header class="app-header">
-      <div class="logo">
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="logo-icon"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-        <span class="font-semibold">PsAgent</span>
+      <div class="header-left">
+        <div class="logo">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="logo-icon"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          <span class="font-semibold">PsAgent</span>
+        </div>
+        <div class="view-switch">
+          <button class="view-chip" :class="{ active: viewMode === 'agent' }" @click="viewMode = 'agent'">Agent</button>
+          <button class="view-chip" :class="{ active: viewMode === 'tool_lab' }" @click="viewMode = 'tool_lab'">Tool Lab</button>
+        </div>
       </div>
-      <div class="header-toggles">
+      <div v-if="viewMode === 'agent'" class="header-toggles">
         <label class="toggle-chip">
           <input v-model="plannerThinkingEnabled" type="checkbox" />
           <span>Thinking</span>
@@ -285,7 +294,13 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div class="app-body" :class="{ 'app-body-top': currentState === 'completed' }">
+    <div v-if="viewMode === 'tool_lab'" class="app-body app-body-tool-lab">
+      <div class="view-container view-tool-lab">
+        <ToolLabWorkbench />
+      </div>
+    </div>
+
+    <div v-else class="app-body" :class="{ 'app-body-top': currentState === 'completed' }">
       <transition name="slide-up" mode="out-in">
         
         <!-- State: IDLE -->
@@ -405,6 +420,12 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--border-glass);
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .logo {
   display: flex;
   align-items: center;
@@ -412,6 +433,29 @@ onBeforeUnmount(() => {
   color: var(--text-inverse);
   font-size: 1.1rem;
   letter-spacing: 0.5px;
+}
+
+.view-switch {
+  display: inline-flex;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.view-chip {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.view-chip.active {
+  background: rgba(99, 102, 241, 0.18);
+  color: var(--text-inverse);
 }
 
 .logo-icon {
@@ -509,10 +553,19 @@ onBeforeUnmount(() => {
   padding: 40px 20px;
 }
 
+.app-body-tool-lab {
+  align-items: stretch;
+  padding: 24px;
+}
+
 .view-container {
   width: 100%;
   max-width: 680px;
   margin: 0 auto;
+}
+
+.view-tool-lab {
+  max-width: 1480px;
 }
 
 .view-wide {

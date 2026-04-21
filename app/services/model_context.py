@@ -6,7 +6,7 @@ from typing import Any
 
 from app.graph.state import AnalyzeImageResult, EditPlan, ExecutionTraceItem, PreferenceMemory, RequestIntent, ToolCatalogItem
 from app.services.planner_param_codec import planner_param_spec
-from app.tools.tool_specs import MASK_PARAM_KEYS, MASK_PARAMS_SCHEMA
+from app.tools.common.mask_contracts import MASK_PARAM_KEYS, MASK_PARAMS_SCHEMA
 
 
 _BOUND_KEYS = (

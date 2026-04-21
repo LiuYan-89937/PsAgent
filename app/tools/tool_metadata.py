@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.tools.tool_registry import build_default_tool_registry
+from app.tools.catalog import TOOL_SPECS
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,8 +22,7 @@ def _all_tool_metadata() -> tuple[ToolMetadata, ...]:
     """Build immutable metadata records from the native registry."""
 
     metadata: list[ToolMetadata] = []
-    for registered in build_default_tool_registry().list():
-        spec = registered.spec
+    for spec in TOOL_SPECS:
         metadata.append(
             ToolMetadata(
                 name=spec.name,
@@ -48,6 +47,6 @@ PARSE_REQUEST_KEYWORDS = tuple((item.name, item.keywords) for item in ALL_TOOL_M
 def validate_tool_name(name: str) -> str:
     """Validate that a planner-facing tool name is registered."""
 
-    if build_default_tool_registry().get(name) is None:
+    if not any(spec.name == name for spec in TOOL_SPECS):
         raise ValueError(f"Unsupported tool name: {name}")
     return name

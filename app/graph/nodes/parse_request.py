@@ -137,20 +137,6 @@ def _infer_requested_packages(text: str) -> list[dict[str, Any]]:
             strength=max(strength, 0.22),
         )
 
-    if _contains_any(text, ("夏日", "夏天", "夏日感", "阳光感", "清透", "通透", "空气感", "明媚")):
-        _append_package_request(
-            requests,
-            op="adjust_vibrance_saturation",
-            region="whole_image",
-            strength=max(strength, 0.22),
-        )
-        _append_package_request(
-            requests,
-            op="adjust_exposure",
-            region="whole_image",
-            strength=0.18,
-        )
-
     return requests
 
 
@@ -164,13 +150,11 @@ def _infer_constraints(text: str) -> list[str]:
         constraints.append("preserve_subject")
     if _contains_any(text, ("逆光", "背光")):
         constraints.append("repair_backlighting")
-    if _contains_any(text, ("夏日", "夏天", "夏日感", "阳光感", "清透", "通透", "空气感", "明媚")):
-        constraints.append("build_summer_mood")
     if _contains_any(text, ("参考", "像第二张", "像参考图", "同款", "一样的感觉")):
         constraints.append("match_reference_style")
 
     has_repair_goal = _contains_any(text, ("逆光", "背光", "修复", "提亮", "压高光", "层次", "肤色"))
-    has_style_goal = _contains_any(text, ("质感", "氛围", "色调", "夏日", "通透", "空气感", "胶片", "明媚"))
+    has_style_goal = _contains_any(text, ("质感", "氛围", "色调", "胶片"))
     if has_repair_goal and has_style_goal:
         constraints.append("needs_layered_refinement")
     return constraints
@@ -253,7 +237,7 @@ def parse_request(state: EditState) -> dict:
         constraints=constraints,
         goal_summary=_infer_goal_summary(request_text),
         wants_repair=_contains_any(request_text, ("逆光", "背光", "修复", "提亮", "压高光", "层次", "肤色", "降噪", "去瑕疵")),
-        wants_style=_contains_any(request_text, ("质感", "氛围", "色调", "夏日", "通透", "空气感", "胶片", "明媚")),
+        wants_style=_contains_any(request_text, ("质感", "氛围", "色调", "胶片")),
         requires_local_editing=_infer_requires_local_editing(request_text, explicit_requests),
     )
 

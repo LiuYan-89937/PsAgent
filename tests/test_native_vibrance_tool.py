@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from app.tools.tool_registry import build_default_tool_registry
+from app.tools import require_tool
 
 
 def _muted_color_gradient(width: int = 96, height: int = 64) -> Image.Image:
@@ -44,7 +44,7 @@ class NativeVibranceToolTest(unittest.TestCase):
                 mask.putpixel((x, y), 255)
         mask.save(self.mask_path)
 
-        self.tool = build_default_tool_registry().require("adjust_vibrance_saturation").tool
+        self.tool = require_tool("adjust_vibrance_saturation")
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()

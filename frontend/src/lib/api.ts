@@ -6,6 +6,10 @@ import type {
   ResumeReviewRequest,
   ResumeReviewResponse,
   ToolCatalogResponse,
+  ToolLabMaskRequest,
+  ToolLabMaskResponse,
+  ToolLabRunRequest,
+  ToolLabRunResponse,
   UploadAssetsResponse,
   SseEventPayload,
 } from '@/types/api'
@@ -74,7 +78,7 @@ export async function uploadAssets(files: File[]): Promise<UploadAssetsResponse>
 }
 
 export function listPackages(): Promise<ToolCatalogResponse> {
-  return requestJson<ToolCatalogResponse>('/meta/packages')
+  return requestJson<ToolCatalogResponse>('/meta/tools')
 }
 
 export function submitEdit(payload: EditRequest): Promise<EditResponse> {
@@ -97,6 +101,20 @@ export function submitFeedback(payload: FeedbackRequest): Promise<{ job_id: stri
 
 export function resumeReview(payload: ResumeReviewRequest): Promise<ResumeReviewResponse> {
   return requestJson<ResumeReviewResponse>('/resume-review', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function generateToolLabMask(payload: ToolLabMaskRequest): Promise<ToolLabMaskResponse> {
+  return requestJson<ToolLabMaskResponse>('/tool-lab/masks', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function runToolLab(payload: ToolLabRunRequest): Promise<ToolLabRunResponse> {
+  return requestJson<ToolLabRunResponse>('/tool-lab/run', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

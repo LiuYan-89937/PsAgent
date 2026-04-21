@@ -21,8 +21,8 @@ from app.tools.segmentation_tools import (
     normalize_segmentation_prompt_label,
     resolve_region_mask,
 )
-from app.tools.tool_registry import build_default_tool_registry
-from app.tools.tool_specs import MaskParams
+from app.tools import require_tool_spec
+from app.tools.common.mask_contracts import MaskParams
 
 
 class SegmentationToolsTest(unittest.TestCase):
@@ -172,7 +172,7 @@ class SegmentationToolsTest(unittest.TestCase):
         self.assertTrue(second_call["revert_mask"])
 
     def test_native_tool_schema_includes_mask_prompt_fields(self) -> None:
-        schema = build_default_tool_registry().require("adjust_exposure").spec.planner_schema
+        schema = require_tool_spec("adjust_exposure").planner_schema
         self.assertIn("mask_provider", schema["properties"])
         self.assertIn("mask_prompt", schema["properties"])
         self.assertIn("mask_negative_prompt", schema["properties"])

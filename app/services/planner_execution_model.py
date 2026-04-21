@@ -17,8 +17,7 @@ from app.graph.state import (
 from app.services.model_context import compact_tool_catalog_for_model, shared_mask_params_for_model
 from app.services.planner_runtime_helpers import build_operation_from_tool_call, resolve_planner_tool_name
 from app.services.qwen_model import DEFAULT_TEXT_MODEL, call_qwen_for_json, qwen_model_available
-from app.tools.tool_registry import build_default_tool_registry
-from app.tools.tool_specs import WHOLE_IMAGE_REGION
+from app.tools import TOOL_SPECS_BY_NAME, WHOLE_IMAGE_REGION
 
 
 def planner_execution_model_available() -> bool:
@@ -159,16 +158,17 @@ def _normalize_plan_steps(
 ) -> list[PlannerExecutionStep]:
     """Resolve tool names, decode planner params, and enforce stage tool visibility."""
 
-    registry = build_default_tool_registry()
     allowed = set(stage_policy.visible_tools)
     normalized_steps: list[PlannerExecutionStep] = []
     for index, step in enumerate(steps[: stage_policy.step_budget]):
         validated = step if isinstance(step, PlannerExecutionStep) else PlannerExecutionStep.model_validate(step)
         raw_arguments = dict(validated.params or {})
         raw_arguments["region"] = validated.region or WHOLE_IMAGE_REGION
-        resolved_tool_name, _ = resolve_planner_tool_name(validated.op, raw_arguments, registry=registry)
+        resolved_tool_name, _ = resolve_planner_tool_name(validated.op, raw_arguments)
         if resolved_tool_name not in allowed:
             raise RuntimeError(f"Planner selected disallowed tool for {stage_policy.key}: {resolved_tool_name}")
+        if resolved_tool_name not in TOOL_SPECS_BY_NAME:
+            raise RuntimeError(f"Planner selected unknown tool: {resolved_tool_name}")
         runtime_operation = build_operation_from_tool_call(resolved_tool_name, raw_arguments)
         normalized_steps.append(
             PlannerExecutionStep(

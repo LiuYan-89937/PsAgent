@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from app.tools.tool_registry import build_default_tool_registry
+from app.tools import require_tool
 
 
 def _mean_luminance(image_path: str) -> float:
@@ -33,7 +33,7 @@ class NativeExposureToolTest(unittest.TestCase):
                 mask.putpixel((x, y), 255)
         mask.save(self.mask_path)
 
-        self.tool = build_default_tool_registry().require("adjust_exposure").tool
+        self.tool = require_tool("adjust_exposure")
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()

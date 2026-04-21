@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_tool_registry
-from app.api.schemas import ToolCatalogResponse
-from app.tools.tool_registry import ToolRegistry
+from app.api.deps import get_tool_catalog
+from app.api.schemas import ToolCatalogItemResponse, ToolCatalogResponse
 
 router = APIRouter(prefix="/meta", tags=["meta"])
 
 
+@router.get("/tools", response_model=ToolCatalogResponse)
 @router.get("/packages", response_model=ToolCatalogResponse)
 async def list_packages(
-    registry: ToolRegistry = Depends(get_tool_registry),
+    tool_catalog: tuple[dict, ...] = Depends(get_tool_catalog),
 ) -> ToolCatalogResponse:
     """Return the current planner-facing native tool catalog.
 
@@ -23,4 +23,6 @@ async def list_packages(
     3. 前端调试当前后端实际支持的工具和参数
     """
 
-    return ToolCatalogResponse(items=registry.export_catalog())
+    return ToolCatalogResponse(
+        items=[ToolCatalogItemResponse.model_validate(item) for item in tool_catalog]
+    )

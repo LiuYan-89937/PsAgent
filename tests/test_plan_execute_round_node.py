@@ -155,10 +155,11 @@ class StagePipelineNodeTest(unittest.TestCase):
             "preserve": [],
             "steps": [
                 {
-                    "op": "adjust_contrast",
+                    "op": "adjust_skin_brightness",
                     "region": "主体面部区域",
                     "params": {
-                        "strength": 0.18,
+                        "brightness_shift": 0.12,
+                        "saturation_shift": -0.04,
                         "mask_provider": "fal_sam3",
                         "mask_prompt": "face",
                         "mask_semantic_type": True,
@@ -166,10 +167,11 @@ class StagePipelineNodeTest(unittest.TestCase):
                     "priority": 0,
                 },
                 {
-                    "op": "adjust_vibrance_saturation",
+                    "op": "adjust_face_color_cleanup",
                     "region": "人物脸部皮肤",
                     "params": {
-                        "strength": 0.1,
+                        "yellow_reduce": 0.08,
+                        "magenta_balance": 0.04,
                         "mask_provider": "fal_sam3",
                         "mask_prompt": "face",
                         "mask_semantic_type": True,

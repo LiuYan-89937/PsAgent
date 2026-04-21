@@ -2,26 +2,31 @@
 
 from __future__ import annotations
 
+import re
 import unittest
+from pathlib import Path
 
-from app.tools.tool_registry import build_default_tool_registry
+from app.tools import NATIVE_TOOLS, TOOL_SPECS, export_tool_catalog
 
 
 class NativeToolRegistryTest(unittest.TestCase):
-    """Verify the native registry only exposes the new baseline tools."""
+    """Verify the native registry matches the documented native tool catalog."""
 
-    def test_registry_registers_only_three_native_tools(self) -> None:
-        registry = build_default_tool_registry()
-        tool_names = [registered.spec.name for registered in registry.list()]
+    def _documented_tool_names(self) -> list[str]:
+        doc_path = Path("/Users/liuyan/Desktop/PsAgent/docs/适合接入当前且易实现的纯工具列表.md")
+        content = doc_path.read_text(encoding="utf-8")
+        names = sorted(set(re.findall(r"(?:adjust|apply)_[a-z_]+", content)))
+        return names
 
-        self.assertEqual(
-            tool_names,
-            ["adjust_exposure", "adjust_contrast", "adjust_vibrance_saturation"],
-        )
+    def test_registry_matches_documented_native_tools(self) -> None:
+        tool_names = [spec.name for spec in TOOL_SPECS]
+
+        self.assertEqual(set(tool_names), set(self._documented_tool_names()))
+        self.assertEqual(len(tool_names), len(self._documented_tool_names()))
 
     def test_exported_catalog_contains_tool_spec_and_planner_schema(self) -> None:
-        registry = build_default_tool_registry()
-        catalog = registry.export_catalog()
+        self.assertEqual([tool.name for tool in NATIVE_TOOLS], [spec.name for spec in TOOL_SPECS])
+        catalog = export_tool_catalog()
 
         exposure = next(item for item in catalog if item["name"] == "adjust_exposure")
         self.assertEqual(exposure["label"], "曝光")
@@ -33,6 +38,19 @@ class NativeToolRegistryTest(unittest.TestCase):
         self.assertIn("mask_prompt", exposure["planner_schema"]["properties"])
         self.assertNotIn("image_path", exposure["planner_schema"]["properties"])
         self.assertNotIn("mask_path", exposure["planner_schema"]["properties"])
+
+        skin_smooth = next(item for item in catalog if item["name"] == "adjust_skin_smooth")
+        self.assertEqual(skin_smooth["family"], "portrait")
+        self.assertIn("subject_refine", skin_smooth["stage_affinity"])
+
+        color_lookup = next(item for item in catalog if item["name"] == "apply_color_lookup")
+        self.assertEqual(color_lookup["family"], "color")
+        self.assertEqual(color_lookup["mask_policy"], "optional")
+
+        teeth = next(item for item in catalog if item["name"] == "adjust_teeth_whiten")
+        self.assertTrue(teeth["requires_mask"])
+        self.assertEqual(teeth["mask_policy"], "required")
+        self.assertEqual(teeth["recommended_mask_prompt"], "teeth")
 
 
 if __name__ == "__main__":

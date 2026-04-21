@@ -129,6 +129,41 @@ class StageRunnerWithNativeToolsTest(unittest.TestCase):
         self.assertEqual(len(result["execution_trace"]), 2)
         self.assertEqual(len(MaskCatalog.model_validate(result["mask_catalog"]).items), 1)
 
+    def test_stage_runner_skips_required_mask_tool_without_local_target(self) -> None:
+        state = self._base_state()
+        state["edit_profile"]["subject_refine_needed"] = True
+        state.update(prepare_stage_context(state, stage_key="subject_refine"))
+        state["stage_plan"] = {
+            "mode": "explicit",
+            "domain": "portrait",
+            "executor": "deterministic",
+            "preserve": [],
+            "steps": [
+                {
+                    "op": "adjust_teeth_whiten",
+                    "region": "whole_image",
+                    "params": {
+                        "yellow_reduce": 0.25,
+                    },
+                    "priority": 0,
+                }
+            ],
+            "step_budget": 3,
+            "summary": "主体优化。",
+            "should_write_memory": False,
+            "memory_candidates": [],
+            "needs_confirmation": False,
+        }
+
+        with patch("app.graph.nodes.stage_pipeline.resolve_region_mask") as mocked_segmentation:
+            result = execute_stage_plan(state, stage_key="subject_refine")
+
+        self.assertEqual(mocked_segmentation.call_count, 0)
+        self.assertEqual(len(result["execution_trace"]), 1)
+        trace_item = result["execution_trace"][0]
+        self.assertFalse(trace_item.ok)
+        self.assertIn("requires a mask", (trace_item.error or "").lower())
+
 
 if __name__ == "__main__":
     unittest.main()

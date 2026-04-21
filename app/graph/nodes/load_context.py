@@ -19,7 +19,7 @@ from app.graph.state import (
     coerce_planner_execution_plan,
     coerce_tool_catalog,
 )
-from app.tools.tool_registry import build_default_tool_registry
+from app.tools import export_tool_catalog
 
 
 def load_context(state: EditState) -> dict:
@@ -31,8 +31,7 @@ def load_context(state: EditState) -> dict:
     3. 保证后面的节点不需要反复处理 None / 缺字段。
     """
 
-    registry = build_default_tool_registry()
-    tool_catalog = coerce_tool_catalog(state.get("tool_catalog", registry.export_catalog()))
+    tool_catalog = coerce_tool_catalog(state.get("tool_catalog", export_tool_catalog()))
     request_intent = coerce_request_intent(state.get("request_intent"))
     edit_profile = coerce_edit_profile(state.get("edit_profile"))
     execution_trace = [item.model_dump(mode="json") for item in coerce_execution_trace(state.get("execution_trace", []))]

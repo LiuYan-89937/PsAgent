@@ -1,4 +1,4 @@
-"""Unit tests for /meta/packages backed by the native tool registry."""
+"""Unit tests for metadata routes backed by the native tool catalog."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.tools import export_tool_catalog
 
 
 class MetaPackagesWithNativeToolsTest(unittest.TestCase):
@@ -14,17 +15,15 @@ class MetaPackagesWithNativeToolsTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.client = TestClient(create_app())
+        self.expected_tool_names = {item["name"] for item in export_tool_catalog()}
 
-    def test_meta_packages_returns_only_native_tools(self) -> None:
-        response = self.client.get("/meta/packages")
+    def test_meta_tools_returns_only_native_tools(self) -> None:
+        response = self.client.get("/meta/tools")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         tool_names = {item["name"] for item in payload["items"]}
-        self.assertEqual(
-            tool_names,
-            {"adjust_exposure", "adjust_contrast", "adjust_vibrance_saturation"},
-        )
+        self.assertEqual(tool_names, self.expected_tool_names)
 
         exposure = next(item for item in payload["items"] if item["name"] == "adjust_exposure")
         self.assertEqual(exposure["label"], "曝光")
@@ -33,6 +32,13 @@ class MetaPackagesWithNativeToolsTest(unittest.TestCase):
         self.assertIn("mask_prompt", exposure["planner_schema"]["properties"])
         self.assertNotIn("image_path", exposure["planner_schema"]["properties"])
         self.assertNotIn("mask_path", exposure["planner_schema"]["properties"])
+
+    def test_meta_packages_remains_compatible_alias(self) -> None:
+        response = self.client.get("/meta/packages")
+
+        self.assertEqual(response.status_code, 200)
+        tool_names = {item["name"] for item in response.json()["items"]}
+        self.assertEqual(tool_names, self.expected_tool_names)
 
 
 if __name__ == "__main__":

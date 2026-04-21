@@ -11,6 +11,7 @@ from app.api.routes_feedback import router as feedback_router
 from app.api.routes_jobs import router as jobs_router
 from app.api.routes_meta import router as meta_router
 from app.api.routes_review import router as review_router
+from app.api.routes_tool_lab import router as tool_lab_router
 from app.api.schemas import HealthResponse
 
 
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(feedback_router)
     app.include_router(review_router)
     app.include_router(meta_router)
+    app.include_router(tool_lab_router)
     return app
 
 

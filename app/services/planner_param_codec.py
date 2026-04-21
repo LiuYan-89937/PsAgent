@@ -7,8 +7,7 @@ import re
 from typing import Any
 
 from app.tools.segmentation_tools import normalize_segmentation_prompt_label
-from app.tools.tool_registry import build_default_tool_registry
-from app.tools.tool_specs import MASK_PARAM_KEYS, WHOLE_IMAGE_REGION
+from app.tools import MASK_PARAM_KEYS, WHOLE_IMAGE_REGION, require_tool_spec
 
 
 def schema_non_null_variants(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -148,9 +147,7 @@ def decode_planner_argument_value(value: Any, spec: dict[str, Any]) -> Any:
 def decode_planner_operation_params(tool_name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any], float | None]:
     """Decode planner arguments into runtime params for a concrete tool."""
 
-    registry = build_default_tool_registry()
-    registered_tool = registry.require(tool_name)
-    params_schema = registered_tool.spec.planner_schema
+    params_schema = require_tool_spec(tool_name).planner_schema
     schema_properties = params_schema.get("properties", {}) if isinstance(params_schema, dict) else {}
     region = str(arguments.get("region") or WHOLE_IMAGE_REGION)
     params: dict[str, Any] = {}
@@ -174,10 +171,9 @@ def decode_planner_operation_params(tool_name: str, arguments: dict[str, Any]) -
 def normalize_runtime_tool_params(tool_name: str, params: dict[str, Any] | None) -> dict[str, Any]:
     """Apply ToolSpec defaults and ignore explicit null overrides for runtime execution."""
 
-    registry = build_default_tool_registry()
-    registered_tool = registry.require(tool_name)
-    schema_properties = dict(registered_tool.spec.planner_schema.get("properties") or {})
-    merged = dict(registered_tool.spec.default_params)
+    tool_spec = require_tool_spec(tool_name)
+    schema_properties = dict(tool_spec.planner_schema.get("properties") or {})
+    merged = dict(tool_spec.default_params)
     for key, value in dict(params or {}).items():
         if value is None:
             continue

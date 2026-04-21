@@ -1,22 +1,17 @@
-"""Native tool specs, planner schema helpers, and mask parameter definitions."""
+"""Shared mask parameter contracts and schema helpers."""
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-MaskPolicy = Literal["none", "optional", "required"]
-RiskLevel = Literal["low", "medium", "high"]
-RegionExecutionMode = Literal["whole_image", "masked_region"]
 MaskProvider = Literal["aliyun", "fal_sam3"]
 
-WHOLE_IMAGE_REGION: RegionExecutionMode = "whole_image"
-MASKED_REGION_MODE: RegionExecutionMode = "masked_region"
-
 MASK_PARAM_TO_RUNTIME_KEY = {
+    # 左边是 planner / API / catalog 侧的参数名，
+    # 右边是 segmentation provider 调用时真正用的 runtime kwargs。
     "mask_provider": "provider",
     "mask_prompt": "prompt",
     "mask_negative_prompt": "negative_prompt",
@@ -35,6 +30,8 @@ MASK_PARAM_KEYS = frozenset(MASK_PARAM_TO_RUNTIME_KEY)
 class MaskParams(BaseModel):
     """Shared planner-facing mask parameters handled by the stage runner."""
 
+    # 这份 contract 的作用是：
+    # 让所有工具共用一套 mask_* 语义，而不是每个工具各自发明一套。
     model_config = ConfigDict(extra="forbid")
 
     mask_provider: MaskProvider | None = Field(
@@ -97,6 +94,8 @@ class MaskParams(BaseModel):
     def _normalize_prompt_text(cls, value: Any) -> Any:
         """Trim and normalize mask prompt whitespace."""
 
+        # prompt 文本在进入缓存签名和 provider 调用前先做一层简单归一化，
+        # 避免因为空格差异导致复用失效。
         if value is None or not isinstance(value, str):
             return value
         normalized = " ".join(value.strip().split())
@@ -106,6 +105,8 @@ class MaskParams(BaseModel):
     def _validate_mask_constraints(self) -> "MaskParams":
         """Validate provider-specific mask constraints."""
 
+        # 这里把 provider 能力边界前置住，
+        # 避免到了分割层才因为参数不支持而出很晚的错。
         if self.mask_negative_prompt and not self.mask_prompt:
             raise ValueError("mask_negative_prompt requires mask_prompt.")
         if self.mask_use_grounding_dino and not self.mask_prompt:
@@ -134,6 +135,8 @@ class MaskParams(BaseModel):
     def to_runtime_options(self) -> dict[str, Any]:
         """Convert validated mask params into segmentation runtime kwargs."""
 
+        # stage runner 最终调用 segmentation provider 时，
+        # 用的就是这层转换后的 runtime 参数名。
         payload = self.model_dump(exclude_none=True)
         return {
             runtime_key: payload[param_key]
@@ -143,118 +146,3 @@ class MaskParams(BaseModel):
 
 
 MASK_PARAMS_SCHEMA = MaskParams.model_json_schema()
-
-
-class ToolSpec(BaseModel):
-    """Static declaration for one native tool."""
-
-    name: str
-    label: str
-    description: str
-    family: str
-    stage_affinity: list[str] = Field(default_factory=list)
-    supports_mask: bool = False
-    supports_whole_image: bool = True
-    default_params: dict[str, Any] = Field(default_factory=dict)
-    planner_schema: dict[str, Any] = Field(default_factory=dict)
-    primary_param: str = "strength"
-    risk_level: RiskLevel = "low"
-    status_label: str = ""
-    keywords: tuple[str, ...] = ()
-
-
-class ToolExecutionResult(BaseModel):
-    """Standard execution result returned by native tools."""
-
-    ok: bool
-    tool: str
-    output_image: str | None = None
-    applied_params: dict[str, Any] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
-    artifacts: dict[str, Any] = Field(default_factory=dict)
-    fallback_used: bool = False
-    error: str | None = None
-
-
-def execution_modes_for_spec(spec: ToolSpec) -> list[RegionExecutionMode]:
-    """Return the runtime execution modes implied by a tool spec."""
-
-    modes: list[RegionExecutionMode] = []
-    if spec.supports_whole_image:
-        modes.append(WHOLE_IMAGE_REGION)
-    if spec.supports_mask:
-        modes.append(MASKED_REGION_MODE)
-    return modes
-
-
-def merge_object_schemas(primary: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
-    """Merge two object schemas without mutating either input."""
-
-    merged: dict[str, Any] = dict(primary)
-    merged.setdefault("type", "object")
-    merged_properties = dict(primary.get("properties") or {})
-    merged_properties.update(extra.get("properties") or {})
-    merged["properties"] = merged_properties
-
-    required: list[str] = []
-    for source_list in (primary.get("required") or [], extra.get("required") or []):
-        for item in source_list:
-            if item not in required:
-                required.append(item)
-    if required:
-        merged["required"] = required
-
-    if "description" not in merged and extra.get("description"):
-        merged["description"] = extra["description"]
-    if "title" not in merged and extra.get("title"):
-        merged["title"] = extra["title"]
-    return merged
-
-
-def strip_object_schema_fields(schema: dict[str, Any], *, excluded_fields: set[str]) -> dict[str, Any]:
-    """Return a copy of an object schema with selected fields removed."""
-
-    sanitized = dict(schema)
-    properties = dict(schema.get("properties") or {})
-    for field_name in excluded_fields:
-        properties.pop(field_name, None)
-    sanitized["properties"] = properties
-
-    required = [item for item in list(schema.get("required") or []) if item not in excluded_fields]
-    if required:
-        sanitized["required"] = required
-    else:
-        sanitized.pop("required", None)
-    return sanitized
-
-
-def build_planner_schema(
-    tool: BaseTool,
-    *,
-    supports_mask: bool,
-    excluded_fields: set[str] | None = None,
-) -> dict[str, Any]:
-    """Build the planner-visible schema from a native @tool plus ToolSpec flags."""
-
-    tool_schema = tool.get_input_schema().model_json_schema()
-    if excluded_fields:
-        tool_schema = strip_object_schema_fields(tool_schema, excluded_fields=excluded_fields)
-    if not supports_mask:
-        return tool_schema
-    return merge_object_schemas(tool_schema, MASK_PARAMS_SCHEMA)
-
-
-def extract_mask_params(params: dict[str, Any]) -> dict[str, Any]:
-    """Pick only shared mask params from a merged tool params payload."""
-
-    return {
-        key: value
-        for key, value in params.items()
-        if key in MASK_PARAM_KEYS and value is not None and value != ""
-    }
-
-
-def strip_mask_params(params: dict[str, Any]) -> dict[str, Any]:
-    """Remove shared mask params from a merged tool params payload."""
-
-    return {key: value for key, value in params.items() if key not in MASK_PARAM_KEYS}

@@ -205,6 +205,97 @@ def apply_exposure_adjustment(
     return _save_result_image(result, output_path)
 
 
+def apply_brightness_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    brightness_offset: float,
+    protect_highlights: float = 0.2,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Apply a restrained brightness shift with black-point anchoring and detail preservation."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+
+    brightness_offset = float(np.clip(brightness_offset, -0.6, 0.6))
+    protect_highlights = float(np.clip(protect_highlights, 0.0, 0.85))
+
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    shadow_mask = _shadows_mask(luminance, 0.54)
+    midtone_mask = _midtones_mask(luminance, 0.8)
+    highlight_mask = _highlights_mask(luminance, max(0.16, 0.22 + protect_highlights * 0.18))
+    deep_shadow_anchor = np.power(
+        np.clip((0.07 - luminance) / 0.07, 0.0, 1.0),
+        2.2,
+    ).astype(np.float32)
+    black_anchor = float(np.quantile(luminance, 0.01))
+    white_anchor = float(np.quantile(luminance, 0.995))
+    tonal_span = max(white_anchor - black_anchor, 1e-3)
+    normalized_luminance = np.clip((luminance - black_anchor) / tonal_span, 0.0, 1.0)
+
+    if brightness_offset >= 0:
+        # 亮度工具改成“锚定黑白点后的 gamma 式中间调提亮”，
+        # 让黑位保持稳定、主要提中间调，避免像整段 lift 一样发灰发白。
+        gamma = 1.0 / (1.0 + brightness_offset * 1.85)
+        gamma_luminance = black_anchor + np.power(normalized_luminance, gamma) * tonal_span
+
+        tonal_gate = np.clip(midtone_mask * 0.94 + shadow_mask * 0.34, 0.0, 1.0)
+        tonal_gate *= 1.0 - highlight_mask * (0.78 + protect_highlights * 0.14)
+        tonal_gate *= 1.0 - deep_shadow_anchor * 0.88
+        adjusted_luminance = luminance * (1.0 - tonal_gate) + gamma_luminance * tonal_gate
+
+        # 提亮后轻微回补局部层次，避免中间调被提平后呈现“奶白雾”。
+        local_base = cv2.GaussianBlur(
+            luminance,
+            (0, 0),
+            sigmaX=1.2,
+            sigmaY=1.2,
+            borderType=cv2.BORDER_REPLICATE,
+        )
+        detail_layer = luminance - local_base
+        detail_gate = np.clip(midtone_mask + shadow_mask * 0.22, 0.0, 1.0) * (1.0 - highlight_mask * 0.28)
+        detail_restore = min(brightness_offset * 0.22, 0.09)
+        adjusted_luminance += detail_layer * detail_restore * detail_gate
+    else:
+        # 压暗时也走锚定式 tonal remap，避免简单往下压导致整张图一起闷。
+        gamma = 1.0 + abs(brightness_offset) * 1.65
+        gamma_luminance = black_anchor + np.power(normalized_luminance, gamma) * tonal_span
+        tonal_gate = np.clip(midtone_mask * 0.78 + highlight_mask * 0.36, 0.0, 1.0)
+        tonal_gate *= 1.0 - deep_shadow_anchor * 0.62
+        adjusted_luminance = luminance * (1.0 - tonal_gate) + gamma_luminance * tonal_gate
+
+    adjusted_luminance = np.clip(adjusted_luminance, 0.0, 1.0)
+
+    adjusted_lab = lab.copy()
+    adjusted_lab[:, :, 0] = adjusted_luminance * 100.0
+
+    if brightness_offset > 0:
+        # 提亮时视觉上容易显得“颜色变淡”，
+        # 所以这里只给非高光区域一个很轻的色度补偿，避免奶白化。
+        chroma = np.sqrt(adjusted_lab[:, :, 1] * adjusted_lab[:, :, 1] + adjusted_lab[:, :, 2] * adjusted_lab[:, :, 2])
+        chroma_norm = np.clip(chroma / 72.0, 0.0, 1.0)
+        chroma_boost = (
+            brightness_offset
+            * 0.038
+            * np.clip(midtone_mask + shadow_mask * 0.14, 0.0, 1.0)
+            * (1.0 - highlight_mask * 0.48)
+            * (1.0 - chroma_norm * 0.35)
+        )
+        adjusted_lab[:, :, 1] = np.clip(adjusted_lab[:, :, 1] * (1.0 + chroma_boost), -127.0, 127.0)
+        adjusted_lab[:, :, 2] = np.clip(adjusted_lab[:, :, 2] * (1.0 + chroma_boost), -127.0, 127.0)
+
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
 def apply_highlights_shadows_adjustment(
     image_path: str,
     output_path: str,
@@ -385,6 +476,46 @@ def apply_contrast_adjustment(
     else:
         result_np = adjusted_rgb
 
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_levels_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    input_black: float,
+    input_white: float,
+    gamma: float,
+    output_black: float,
+    output_white: float,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Apply a restrained levels remap on the luminance channel."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+
+    input_black = float(np.clip(input_black, 0.0, 0.9))
+    input_white = float(np.clip(input_white, input_black + 0.02, 1.0))
+    gamma = float(np.clip(gamma, 0.2, 3.5))
+    output_black = float(np.clip(output_black, 0.0, 0.9))
+    output_white = float(np.clip(output_white, output_black + 0.02, 1.0))
+
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    normalized = np.clip((luminance - input_black) / max(input_white - input_black, 1e-6), 0.0, 1.0)
+    adjusted = np.power(np.clip(normalized, 1e-6, 1.0), 1.0 / gamma)
+    adjusted = output_black + adjusted * (output_white - output_black)
+
+    adjusted_lab = lab.copy()
+    adjusted_lab[:, :, 0] = np.clip(adjusted, 0.0, 1.0) * 100.0
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
     result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
     return _save_result_image(result, output_path)
 
@@ -652,6 +783,52 @@ def apply_curves_adjustment(
     return _save_result_image(result, output_path)
 
 
+def apply_midtones_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    midtone_shift: float,
+    midtone_width: float = 0.4,
+    preserve_shadows: float = 0.2,
+    preserve_highlights: float = 0.2,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Adjust only midtone luminance with soft protection on both ends."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+
+    midtone_shift = float(np.clip(midtone_shift, -0.4, 0.4))
+    midtone_width = float(np.clip(midtone_width, 0.2, 1.0))
+    preserve_shadows = float(np.clip(preserve_shadows, 0.0, 0.85))
+    preserve_highlights = float(np.clip(preserve_highlights, 0.0, 0.85))
+
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    midtones = _midtones_mask(luminance, midtone_width)
+    protection = np.clip(
+        _shadows_mask(luminance, 0.3 + preserve_shadows * 0.2) * preserve_shadows
+        + _highlights_mask(luminance, 0.3 + preserve_highlights * 0.2) * preserve_highlights,
+        0.0,
+        0.92,
+    )
+    adjusted = luminance.copy()
+    if midtone_shift >= 0:
+        adjusted += (1.0 - adjusted) * midtone_shift * midtones * (1.0 - protection)
+    else:
+        adjusted -= adjusted * abs(midtone_shift) * midtones * (1.0 - protection)
+
+    adjusted_lab = lab.copy()
+    adjusted_lab[:, :, 0] = np.clip(adjusted, 0.0, 1.0) * 100.0
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
 def apply_clarity_adjustment(
     image_path: str,
     output_path: str,
@@ -688,6 +865,66 @@ def apply_clarity_adjustment(
     adjusted_lab[:, :, 0] = adjusted_luminance * 100.0
     adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
 
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_hue_saturation_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    hue_shift: float,
+    saturation_shift: float,
+    lightness_shift: float,
+    protect_skin: float = 0.0,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Apply global hue, saturation, and lightness shifts in HSV with optional skin protection."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_float, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hue = hsv[:, :, 0]
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+
+    hue_shift = float(np.clip(hue_shift, -180.0, 180.0))
+    saturation_shift = float(np.clip(saturation_shift, -1.0, 1.0))
+    lightness_shift = float(np.clip(lightness_shift, -1.0, 1.0))
+    protect_skin = float(np.clip(protect_skin, 0.0, 1.0))
+
+    if protect_skin > 0:
+        hue_deg = hue * 2.0
+        skin_mask = _color_range_mask(
+            hue_deg,
+            saturation,
+            value,
+            center=28.0,
+            half_width=28.0,
+            saturation_floor=0.06,
+            value_floor=0.16,
+            blur_sigma=1.1,
+        )
+        gate = 1.0 - skin_mask * protect_skin
+    else:
+        gate = 1.0
+
+    hue = (hue + (hue_shift / 2.0) * gate) % 180.0
+    if saturation_shift >= 0:
+        saturation = np.clip(saturation + (1.0 - saturation) * saturation_shift * gate, 0.0, 1.0)
+    else:
+        saturation = np.clip(saturation * (1.0 + saturation_shift * gate), 0.0, 1.0)
+    if lightness_shift >= 0:
+        value = np.clip(value + (1.0 - value) * lightness_shift * gate, 0.0, 1.0)
+    else:
+        value = np.clip(value * (1.0 + lightness_shift * gate), 0.0, 1.0)
+
+    adjusted_hsv = np.stack([hue, saturation, value], axis=-1).astype(np.float32)
+    adjusted_rgb = np.clip(cv2.cvtColor(adjusted_hsv, cv2.COLOR_HSV2RGB), 0.0, 1.0)
     mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
     result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
     result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
@@ -870,6 +1107,125 @@ def apply_color_mixer_adjustment(
     return _save_result_image(result, output_path)
 
 
+def apply_color_balance_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    shadow_cyan_red: float,
+    shadow_magenta_green: float,
+    shadow_yellow_blue: float,
+    midtone_cyan_red: float,
+    midtone_magenta_green: float,
+    midtone_yellow_blue: float,
+    highlight_cyan_red: float,
+    highlight_magenta_green: float,
+    highlight_yellow_blue: float,
+    preserve_luminosity: bool = True,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Apply Photoshop-like color balance shifts on shadows, midtones, and highlights."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+
+    shadow_gate = _shadows_mask(luminance, 0.45)
+    highlight_gate = _highlights_mask(luminance, 0.42)
+    midtone_gate = _midtones_mask(luminance, 0.72)
+
+    a_channel = lab[:, :, 1]
+    b_channel = lab[:, :, 2]
+    a_shift = (
+        (-shadow_cyan_red + shadow_magenta_green) * shadow_gate
+        + (-midtone_cyan_red + midtone_magenta_green) * midtone_gate
+        + (-highlight_cyan_red + highlight_magenta_green) * highlight_gate
+    )
+    b_shift = (
+        (shadow_yellow_blue) * shadow_gate
+        + (midtone_yellow_blue) * midtone_gate
+        + (highlight_yellow_blue) * highlight_gate
+    )
+    adjusted_lab = lab.copy()
+    adjusted_lab[:, :, 1] = np.clip(a_channel + a_shift * 14.0, -127.0, 127.0)
+    adjusted_lab[:, :, 2] = np.clip(b_channel + b_shift * 14.0, -127.0, 127.0)
+    if preserve_luminosity:
+        adjusted_lab[:, :, 0] = lab[:, :, 0]
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_selective_color_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    target_band: str,
+    cyan_shift: float,
+    magenta_shift: float,
+    yellow_shift: float,
+    black_shift: float,
+    relative_mode: bool = True,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Apply an approximate selective-color adjustment on a chosen hue or neutral band."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_float, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hue = hsv[:, :, 0] * 2.0
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+
+    band = str(target_band or "neutrals").strip().lower()
+    if band == "neutrals":
+        band_mask = np.power(np.clip((0.25 - saturation) / 0.25, 0.0, 1.0), 1.2)
+    elif band == "whites":
+        band_mask = np.power(np.clip((0.22 - saturation) / 0.22, 0.0, 1.0), 1.2) * np.clip((value - 0.55) / 0.45, 0.0, 1.0)
+    elif band == "blacks":
+        band_mask = np.power(np.clip((0.25 - saturation) / 0.25, 0.0, 1.0), 1.2) * np.clip((0.35 - value) / 0.35, 0.0, 1.0)
+    else:
+        centers = {
+            "reds": 0.0,
+            "yellows": 58.0,
+            "greens": 120.0,
+            "cyans": 180.0,
+            "blues": 230.0,
+            "magentas": 320.0,
+        }
+        center = centers.get(band, 0.0)
+        band_mask = _color_range_mask(
+            hue,
+            saturation,
+            value,
+            center=center,
+            half_width=28.0,
+            saturation_floor=0.05,
+            value_floor=0.05,
+            blur_sigma=1.2,
+        )
+
+    scale = 1.0 if not relative_mode else np.clip(0.25 + saturation * 0.75, 0.25, 1.0)
+    lab = _rgb_to_lab_float(image_float)
+    adjusted_lab = lab.copy()
+    adjusted_lab[:, :, 1] = np.clip(adjusted_lab[:, :, 1] + (-cyan_shift + magenta_shift) * band_mask * scale * 12.0, -127.0, 127.0)
+    adjusted_lab[:, :, 2] = np.clip(adjusted_lab[:, :, 2] + yellow_shift * band_mask * scale * 12.0, -127.0, 127.0)
+    adjusted_lab[:, :, 0] = np.clip(adjusted_lab[:, :, 0] - black_shift * band_mask * 10.0, 0.0, 100.0)
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
 def apply_white_balance_adjustment(
     image_path: str,
     output_path: str,
@@ -930,6 +1286,582 @@ def apply_white_balance_adjustment(
     else:
         result_np = adjusted_rgb
 
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_black_white_mix_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    red_weight: float,
+    green_weight: float,
+    blue_weight: float,
+    yellow_weight: float,
+    cyan_weight: float,
+    magenta_weight: float,
+    contrast_boost: float,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Convert to black-and-white using weighted color-band mixing."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_float, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hue = hsv[:, :, 0] * 2.0
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+
+    band_weights = {
+        "red": red_weight,
+        "yellow": yellow_weight,
+        "green": green_weight,
+        "cyan": cyan_weight,
+        "blue": blue_weight,
+        "magenta": magenta_weight,
+    }
+    band_centers = {
+        "red": 0.0,
+        "yellow": 58.0,
+        "green": 120.0,
+        "cyan": 180.0,
+        "blue": 230.0,
+        "magenta": 320.0,
+    }
+    combined = np.zeros_like(value, dtype=np.float32)
+    total = np.zeros_like(value, dtype=np.float32) + 1e-6
+    for band, center in band_centers.items():
+        mask = _color_range_mask(
+            hue,
+            saturation,
+            value,
+            center=center,
+            half_width=28.0,
+            saturation_floor=0.04,
+            value_floor=0.04,
+            blur_sigma=1.1,
+        )
+        combined += mask * band_weights[band]
+        total += mask
+    luma = (0.299 * image_float[:, :, 0] + 0.587 * image_float[:, :, 1] + 0.114 * image_float[:, :, 2])
+    mixed = np.clip(luma * (combined / total + 0.5), 0.0, 1.0)
+    mixed = np.clip((mixed - 0.5) * (1.0 + contrast_boost * 0.45) + 0.5, 0.0, 1.0)
+    bw = np.repeat(mixed[:, :, None], 3, axis=2)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(bw, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_channel_mixer_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    red_from_red: float,
+    red_from_green: float,
+    red_from_blue: float,
+    green_from_red: float,
+    green_from_green: float,
+    green_from_blue: float,
+    blue_from_red: float,
+    blue_from_green: float,
+    blue_from_blue: float,
+    monochrome: bool = False,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Mix RGB output channels from weighted RGB input channels."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+
+    if monochrome:
+        gray = (
+            image_float[:, :, 0] * red_from_red
+            + image_float[:, :, 1] * red_from_green
+            + image_float[:, :, 2] * red_from_blue
+        )
+        adjusted_rgb = np.repeat(np.clip(gray[:, :, None], 0.0, 1.0), 3, axis=2)
+    else:
+        red = (
+            image_float[:, :, 0] * red_from_red
+            + image_float[:, :, 1] * red_from_green
+            + image_float[:, :, 2] * red_from_blue
+        )
+        green = (
+            image_float[:, :, 0] * green_from_red
+            + image_float[:, :, 1] * green_from_green
+            + image_float[:, :, 2] * green_from_blue
+        )
+        blue = (
+            image_float[:, :, 0] * blue_from_red
+            + image_float[:, :, 1] * blue_from_green
+            + image_float[:, :, 2] * blue_from_blue
+        )
+        adjusted_rgb = np.stack([red, green, blue], axis=2)
+        adjusted_rgb = np.clip(adjusted_rgb, 0.0, 1.0)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_color_overlay_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    overlay_hue: float,
+    overlay_saturation: float,
+    overlay_luminance: float,
+    opacity: float,
+    blend_mode: str = "soft_light",
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Overlay a tint color using a simple blend mode."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+
+    overlay_hsv = np.array(
+        [[[overlay_hue / 2.0, np.clip(overlay_saturation, 0.0, 1.0), np.clip(overlay_luminance, 0.0, 1.0)]]],
+        dtype=np.float32,
+    )
+    overlay_rgb = cv2.cvtColor(overlay_hsv, cv2.COLOR_HSV2RGB)[0, 0]
+    overlay = np.ones_like(image_float) * overlay_rgb[None, None, :]
+
+    mode = str(blend_mode or "soft_light").strip().lower()
+    if mode == "overlay":
+        blended = np.where(
+            image_float <= 0.5,
+            2.0 * image_float * overlay,
+            1.0 - 2.0 * (1.0 - image_float) * (1.0 - overlay),
+        )
+    elif mode == "color":
+        overlay_hsv_full = cv2.cvtColor(overlay.astype(np.float32), cv2.COLOR_RGB2HSV)
+        image_hsv = cv2.cvtColor(image_float.astype(np.float32), cv2.COLOR_RGB2HSV)
+        image_hsv[:, :, 0] = overlay_hsv_full[:, :, 0]
+        image_hsv[:, :, 1] = overlay_hsv_full[:, :, 1]
+        blended = cv2.cvtColor(image_hsv, cv2.COLOR_HSV2RGB)
+    else:
+        blended = (1.0 - 2.0 * overlay) * image_float * image_float + 2.0 * overlay * image_float
+
+    adjusted_rgb = np.clip(image_float * (1.0 - opacity) + blended * opacity, 0.0, 1.0)
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_soft_glow_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    amount: float,
+    blur_radius: float,
+    contrast_restore: float,
+    highlight_bias: float,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Apply a restrained soft-glow / focus-softening effect."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    blurred = cv2.GaussianBlur(
+        image_float,
+        (0, 0),
+        sigmaX=max(0.6, blur_radius),
+        sigmaY=max(0.6, blur_radius),
+        borderType=cv2.BORDER_REPLICATE,
+    )
+    mixed = np.clip(image_float * (1.0 - amount) + blurred * amount, 0.0, 1.0)
+    if contrast_restore > 0:
+        lab = _rgb_to_lab_float(mixed)
+        luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+        detail_base = cv2.GaussianBlur(luminance, (0, 0), sigmaX=1.2, sigmaY=1.2, borderType=cv2.BORDER_REPLICATE)
+        detail = luminance - detail_base
+        highlight_gate = 1.0 - _highlights_mask(luminance, max(0.14, highlight_bias * 0.4))
+        luminance = np.clip(luminance + detail * contrast_restore * 0.28 * highlight_gate, 0.0, 1.0)
+        lab[:, :, 0] = luminance * 100.0
+        mixed = _lab_float_to_rgb(lab)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(mixed, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_single_color_shift_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    target_hue: float,
+    hue_width: float,
+    hue_shift: float,
+    saturation_shift: float,
+    luminance_shift: float,
+    softness: float = 0.5,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Shift one narrow hue band with soft falloff in HSV space."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_np, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hue = hsv[:, :, 0] * 2.0
+    saturation = hsv[:, :, 1] / 255.0
+    value = hsv[:, :, 2] / 255.0
+
+    target_hue = float(np.clip(target_hue, 0.0, 360.0))
+    hue_width = float(np.clip(hue_width, 8.0, 90.0))
+    hue_shift = float(np.clip(hue_shift, -180.0, 180.0))
+    saturation_shift = float(np.clip(saturation_shift, -1.0, 1.0))
+    luminance_shift = float(np.clip(luminance_shift, -1.0, 1.0))
+    softness = float(np.clip(softness, 0.0, 1.0))
+
+    blur_sigma = 0.8 + softness * 2.2
+    target_mask = _color_range_mask(
+        hue,
+        saturation,
+        value,
+        center=target_hue,
+        half_width=hue_width,
+        saturation_floor=max(0.02, 0.08 - softness * 0.04),
+        value_floor=0.05,
+        blur_sigma=blur_sigma,
+    )
+
+    adjusted_hsv = hsv.copy()
+    adjusted_hsv[:, :, 0] = (adjusted_hsv[:, :, 0] + (hue_shift / 2.0) * target_mask) % 180.0
+    if saturation_shift >= 0:
+        adjusted_hsv[:, :, 1] = np.clip(
+            adjusted_hsv[:, :, 1] + (255.0 - adjusted_hsv[:, :, 1]) * saturation_shift * target_mask,
+            0.0,
+            255.0,
+        )
+    else:
+        adjusted_hsv[:, :, 1] = np.clip(
+            adjusted_hsv[:, :, 1] * (1.0 + saturation_shift * target_mask),
+            0.0,
+            255.0,
+        )
+    if luminance_shift >= 0:
+        adjusted_hsv[:, :, 2] = np.clip(
+            adjusted_hsv[:, :, 2] + (255.0 - adjusted_hsv[:, :, 2]) * luminance_shift * target_mask,
+            0.0,
+            255.0,
+        )
+    else:
+        adjusted_hsv[:, :, 2] = np.clip(
+            adjusted_hsv[:, :, 2] * (1.0 + luminance_shift * target_mask),
+            0.0,
+            255.0,
+        )
+
+    adjusted_rgb = cv2.cvtColor(adjusted_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32) / 255.0
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_neutral_clean_tone_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    neutral_range: float,
+    yellow_blue_shift: float,
+    green_magenta_shift: float,
+    brightness_shift: float,
+    protect_skin: float = 0.3,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Clean low-saturation neutral tones while protecting skin hues."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_np, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hue = hsv[:, :, 0] * 2.0
+    saturation = hsv[:, :, 1] / 255.0
+    value = hsv[:, :, 2] / 255.0
+
+    neutral_range = float(np.clip(neutral_range, 0.05, 0.5))
+    yellow_blue_shift = float(np.clip(yellow_blue_shift, -1.0, 1.0))
+    green_magenta_shift = float(np.clip(green_magenta_shift, -1.0, 1.0))
+    brightness_shift = float(np.clip(brightness_shift, -0.4, 0.4))
+    protect_skin = float(np.clip(protect_skin, 0.0, 1.0))
+
+    neutral_mask = np.power(np.clip((neutral_range - saturation) / max(neutral_range, 1e-6), 0.0, 1.0), 1.25)
+    neutral_mask *= np.power(np.clip((value + 0.06) / 1.06, 0.0, 1.0), 0.9)
+    if protect_skin > 0:
+        skin_mask = _color_range_mask(
+            hue,
+            saturation,
+            value,
+            center=28.0,
+            half_width=28.0,
+            saturation_floor=0.05,
+            value_floor=0.12,
+            blur_sigma=1.0,
+        )
+        neutral_mask *= 1.0 - skin_mask * protect_skin
+
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    adjusted_lab = lab.copy()
+    if brightness_shift >= 0:
+        adjusted_luminance = luminance + (1.0 - luminance) * brightness_shift * neutral_mask
+    else:
+        adjusted_luminance = luminance - luminance * abs(brightness_shift) * neutral_mask
+    adjusted_lab[:, :, 0] = np.clip(adjusted_luminance, 0.0, 1.0) * 100.0
+    adjusted_lab[:, :, 1] = np.clip(adjusted_lab[:, :, 1] + green_magenta_shift * neutral_mask * 12.0, -127.0, 127.0)
+    adjusted_lab[:, :, 2] = np.clip(adjusted_lab[:, :, 2] + yellow_blue_shift * neutral_mask * 12.0, -127.0, 127.0)
+
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_color_cleanup_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    yellow_reduce: float,
+    green_reduce: float,
+    magenta_balance: float,
+    shadow_desaturate: float,
+    highlight_neutralize: float,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Clean dirty color casts with hue-band masks and Lab chroma cleanup."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_np, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hue = hsv[:, :, 0] * 2.0
+    saturation = hsv[:, :, 1] / 255.0
+    value = hsv[:, :, 2] / 255.0
+
+    yellow_reduce = float(np.clip(yellow_reduce, 0.0, 1.0))
+    green_reduce = float(np.clip(green_reduce, 0.0, 1.0))
+    magenta_balance = float(np.clip(magenta_balance, 0.0, 1.0))
+    shadow_desaturate = float(np.clip(shadow_desaturate, 0.0, 1.0))
+    highlight_neutralize = float(np.clip(highlight_neutralize, 0.0, 1.0))
+
+    yellow_mask = _color_range_mask(
+        hue,
+        saturation,
+        value,
+        center=54.0,
+        half_width=30.0,
+        saturation_floor=0.05,
+        value_floor=0.08,
+        blur_sigma=1.0,
+    )
+    green_mask = _color_range_mask(
+        hue,
+        saturation,
+        value,
+        center=122.0,
+        half_width=34.0,
+        saturation_floor=0.05,
+        value_floor=0.08,
+        blur_sigma=1.0,
+    )
+    magenta_mask = _color_range_mask(
+        hue,
+        saturation,
+        value,
+        center=320.0,
+        half_width=34.0,
+        saturation_floor=0.05,
+        value_floor=0.08,
+        blur_sigma=1.0,
+    )
+
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    shadow_mask = _shadows_mask(luminance, 0.46)
+    highlight_mask = _highlights_mask(luminance, 0.34)
+
+    adjusted_lab = lab.copy()
+    adjusted_lab[:, :, 1] = np.clip(
+        adjusted_lab[:, :, 1]
+        + green_mask * green_reduce * 11.0
+        - magenta_mask * magenta_balance * 10.0
+        - highlight_mask * highlight_neutralize * adjusted_lab[:, :, 1] * 0.22,
+        -127.0,
+        127.0,
+    )
+    adjusted_lab[:, :, 2] = np.clip(
+        adjusted_lab[:, :, 2]
+        - yellow_mask * yellow_reduce * 12.0
+        - highlight_mask * highlight_neutralize * adjusted_lab[:, :, 2] * 0.18,
+        -127.0,
+        127.0,
+    )
+    shadow_scale = 1.0 - shadow_mask * shadow_desaturate * 0.55
+    adjusted_lab[:, :, 1] *= shadow_scale
+    adjusted_lab[:, :, 2] *= shadow_scale
+
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_teeth_whiten_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    yellow_reduce: float,
+    brightness_increase: float,
+    neutralize_gray: float,
+    preserve_contrast: float,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Whiten teeth by reducing yellow cast and lifting restrained luminance."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+
+    yellow_reduce = float(np.clip(yellow_reduce, 0.0, 1.0))
+    brightness_increase = float(np.clip(brightness_increase, 0.0, 1.0))
+    neutralize_gray = float(np.clip(neutralize_gray, 0.0, 1.0))
+    preserve_contrast = float(np.clip(preserve_contrast, 0.0, 1.0))
+
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    highlight_gate = 1.0 - _highlights_mask(luminance, 0.24)
+    detail_base = cv2.GaussianBlur(luminance, (0, 0), sigmaX=1.2, sigmaY=1.2, borderType=cv2.BORDER_REPLICATE)
+    detail = luminance - detail_base
+
+    adjusted_lab = lab.copy()
+    adjusted_luminance = luminance + (1.0 - luminance) * brightness_increase * 0.52 * highlight_gate
+    adjusted_luminance += neutralize_gray * 0.08 * _midtones_mask(luminance, 0.65)
+    adjusted_luminance += detail * preserve_contrast * 0.18
+    adjusted_lab[:, :, 0] = np.clip(adjusted_luminance, 0.0, 1.0) * 100.0
+    adjusted_lab[:, :, 1] = np.clip(adjusted_lab[:, :, 1] * (1.0 - neutralize_gray * 0.16), -127.0, 127.0)
+    adjusted_lab[:, :, 2] = np.clip(adjusted_lab[:, :, 2] - yellow_reduce * 14.0, -127.0, 127.0)
+
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_eye_brighten_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    brightness_increase: float,
+    clarity_boost: float,
+    saturation_boost: float,
+    highlight_boost: float,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Brighten and clarify eyes while keeping highlights controlled."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_np, cv2.COLOR_RGB2HSV).astype(np.float32)
+
+    brightness_increase = float(np.clip(brightness_increase, 0.0, 1.0))
+    clarity_boost = float(np.clip(clarity_boost, 0.0, 1.0))
+    saturation_boost = float(np.clip(saturation_boost, -1.0, 1.0))
+    highlight_boost = float(np.clip(highlight_boost, 0.0, 1.0))
+
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * (1.0 + saturation_boost * 0.9), 0.0, 255.0)
+    base_rgb = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32) / 255.0
+    lab = _rgb_to_lab_float(base_rgb)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    detail_base = cv2.GaussianBlur(luminance, (0, 0), sigmaX=1.4, sigmaY=1.4, borderType=cv2.BORDER_REPLICATE)
+    detail = luminance - detail_base
+    highlight_mask = _highlights_mask(luminance, 0.3)
+    adjusted_luminance = luminance + (1.0 - luminance) * brightness_increase * 0.45
+    adjusted_luminance += detail * clarity_boost * 0.32 * (1.0 - highlight_mask * 0.35)
+    adjusted_luminance += highlight_mask * highlight_boost * 0.08
+    lab[:, :, 0] = np.clip(adjusted_luminance, 0.0, 1.0) * 100.0
+    adjusted_rgb = _lab_float_to_rgb(lab)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
+    return _save_result_image(result, output_path)
+
+
+def apply_lip_enhance_adjustment(
+    image_path: str,
+    output_path: str,
+    *,
+    hue_shift: float,
+    saturation_boost: float,
+    brightness_shift: float,
+    texture_preserve: float,
+    gloss_boost: float,
+    mask_path: str | None = None,
+    feather_radius: float = 0.0,
+) -> str:
+    """Enhance lip color and gloss while preserving texture."""
+
+    image = Image.open(image_path).convert("RGB")
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(image_np, cv2.COLOR_RGB2HSV).astype(np.float32)
+
+    hue_shift = float(np.clip(hue_shift, -180.0, 180.0))
+    saturation_boost = float(np.clip(saturation_boost, -1.0, 1.0))
+    brightness_shift = float(np.clip(brightness_shift, -1.0, 1.0))
+    texture_preserve = float(np.clip(texture_preserve, 0.0, 1.0))
+    gloss_boost = float(np.clip(gloss_boost, 0.0, 1.0))
+
+    hsv[:, :, 0] = (hsv[:, :, 0] + hue_shift / 2.0) % 180.0
+    if saturation_boost >= 0:
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] + (255.0 - hsv[:, :, 1]) * saturation_boost * 0.85, 0.0, 255.0)
+    else:
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * (1.0 + saturation_boost), 0.0, 255.0)
+    if brightness_shift >= 0:
+        hsv[:, :, 2] = np.clip(hsv[:, :, 2] + (255.0 - hsv[:, :, 2]) * brightness_shift * 0.5, 0.0, 255.0)
+    else:
+        hsv[:, :, 2] = np.clip(hsv[:, :, 2] * (1.0 + brightness_shift * 0.7), 0.0, 255.0)
+
+    adjusted_rgb = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32) / 255.0
+    if gloss_boost > 0:
+        lab = _rgb_to_lab_float(adjusted_rgb)
+        luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+        highlight_mask = _highlights_mask(luminance, 0.34)
+        lab[:, :, 0] = np.clip(lab[:, :, 0] + highlight_mask * gloss_boost * 6.0, 0.0, 100.0)
+        adjusted_rgb = _lab_float_to_rgb(lab)
+
+    if texture_preserve > 0:
+        detail_base = cv2.GaussianBlur(image_float, (0, 0), sigmaX=1.0, sigmaY=1.0, borderType=cv2.BORDER_REPLICATE)
+        detail = image_float - detail_base
+        adjusted_rgb = np.clip(adjusted_rgb + detail * texture_preserve * 0.24, 0.0, 1.0)
+
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
     result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
     return _save_result_image(result, output_path)
 

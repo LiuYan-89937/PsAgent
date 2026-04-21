@@ -8,8 +8,7 @@ from collections import Counter
 from typing import Any
 
 from app.services.planner_param_codec import decode_planner_operation_params
-from app.tools.tool_registry import ToolRegistry, build_default_tool_registry
-from app.tools.tool_specs import WHOLE_IMAGE_REGION
+from app.tools import TOOL_SPECS, WHOLE_IMAGE_REGION, require_tool_spec
 
 
 def _normalize_tool_name(value: str) -> str:
@@ -50,10 +49,9 @@ def _cosine_similarity(left: Counter[str], right: Counter[str]) -> float:
     return dot / (left_norm * right_norm)
 
 
-def _tool_candidate_text(registered_tool) -> str:
+def _tool_candidate_text(spec) -> str:
     """Build a compact retrieval document for one tool."""
 
-    spec = registered_tool.spec
     fields = [
         spec.name,
         spec.label,
@@ -70,20 +68,24 @@ def _tool_candidate_text(registered_tool) -> str:
 def resolve_planner_tool_name(
     raw_tool_name: str,
     arguments: dict[str, Any],
-    registry: ToolRegistry | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Resolve a planner-returned tool name with exact-first fallback to light similarity."""
 
-    active_registry = registry or build_default_tool_registry()
     normalized_name = _normalize_tool_name(raw_tool_name)
-    if active_registry.get(raw_tool_name) is not None:
+    try:
+        require_tool_spec(raw_tool_name)
         return raw_tool_name, {"strategy": "exact", "score": 1.0}
-    if active_registry.get(normalized_name) is not None:
+    except KeyError:
+        pass
+    try:
+        require_tool_spec(normalized_name)
         return normalized_name, {"strategy": "normalized", "score": 1.0}
+    except KeyError:
+        pass
 
-    for registered_tool in active_registry.list():
-        if normalized_name in _generated_aliases(registered_tool.spec.name):
-            return registered_tool.spec.name, {"strategy": "alias", "score": 1.0}
+    for spec in TOOL_SPECS:
+        if normalized_name in _generated_aliases(spec.name):
+            return spec.name, {"strategy": "alias", "score": 1.0}
 
     raw_query_vector = _char_trigram_vector(raw_tool_name)
     query_fragments = [raw_tool_name]
@@ -96,13 +98,13 @@ def resolve_planner_tool_name(
     query_vector = _char_trigram_vector(" ".join(query_fragments))
 
     scored_candidates: list[tuple[str, float]] = []
-    for registered_tool in active_registry.list():
-        candidate_vector = _char_trigram_vector(_tool_candidate_text(registered_tool))
+    for spec in TOOL_SPECS:
+        candidate_vector = _char_trigram_vector(_tool_candidate_text(spec))
         candidate_score = max(
             _cosine_similarity(raw_query_vector, candidate_vector),
             _cosine_similarity(query_vector, candidate_vector),
         )
-        scored_candidates.append((registered_tool.spec.name, candidate_score))
+        scored_candidates.append((spec.name, candidate_score))
 
     scored_candidates.sort(key=lambda item: item[1], reverse=True)
     if not scored_candidates:
