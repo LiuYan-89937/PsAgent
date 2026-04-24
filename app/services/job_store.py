@@ -14,9 +14,11 @@ from app.graph.state import (
     EvaluationReport,
     ExecutionTraceItem,
     FeedbackItem,
+    FocusKey,
     FallbackTraceItem,
     JobEvent,
-    PhaseArtifact,
+    ObjectiveCard,
+    SearchRoundArtifact,
     SegmentationTraceItem,
     coerce_approval_payload,
     coerce_edit_plan,
@@ -26,7 +28,8 @@ from app.graph.state import (
     coerce_feedback_items,
     coerce_fallback_trace,
     coerce_job_events,
-    coerce_phase_artifacts,
+    coerce_objective_card,
+    coerce_search_rounds,
     coerce_segmentation_trace,
 )
 
@@ -48,13 +51,18 @@ class JobRecord(BaseModel):
     edit_plan: EditPlan | None = None
     eval_report: EvaluationReport | None = None
     execution_trace: list[ExecutionTraceItem] = Field(default_factory=list)
+    final_execution_trace: list[ExecutionTraceItem] = Field(default_factory=list)
     segmentation_trace: list[SegmentationTraceItem] = Field(default_factory=list)
     fallback_trace: list[FallbackTraceItem] = Field(default_factory=list)
-    phases: dict[str, PhaseArtifact] = Field(default_factory=dict)
+    objective_card: ObjectiveCard | None = None
+    rounds: list[SearchRoundArtifact] = Field(default_factory=list)
+    selected_candidate_id: str | None = None
+    final_review: EvaluationReport | None = None
     events: list[JobEvent] = Field(default_factory=list)
     approval_required: bool = False
     approval_payload: ApprovalPayload | None = None
-    current_stage: str | None = None
+    current_round: str | None = None
+    current_focus: FocusKey | None = None
     current_message: str | None = None
     feedback: list[FeedbackItem] = Field(default_factory=list)
     error: str | None = None
@@ -120,7 +128,8 @@ class JobStore:
         *,
         error: str | None = None,
         error_detail: ErrorDetail | dict[str, Any] | None = None,
-        current_stage: str | None = None,
+        current_round: str | None = None,
+        current_focus: FocusKey | str | None = None,
         current_message: str | None = None,
         approval_required: bool | None = None,
         request_text: str | None | object = _UNSET,
@@ -131,8 +140,10 @@ class JobStore:
         record.status = status
         record.error = error
         record.error_detail = coerce_error_detail(error_detail)
-        if current_stage is not None:
-            record.current_stage = current_stage
+        if current_round is not None:
+            record.current_round = current_round
+        if current_focus is not None:
+            record.current_focus = current_focus  # type: ignore[assignment]
         if current_message is not None:
             record.current_message = current_message
         if approval_required is not None:
@@ -149,13 +160,18 @@ class JobStore:
         edit_plan: EditPlan | dict[str, Any] | None | object = _UNSET,
         eval_report: EvaluationReport | dict[str, Any] | None | object = _UNSET,
         execution_trace: list[dict[str, Any]] | object = _UNSET,
+        final_execution_trace: list[dict[str, Any]] | object = _UNSET,
         segmentation_trace: list[dict[str, Any]] | object = _UNSET,
         fallback_trace: list[dict[str, Any]] | object = _UNSET,
-        phases: dict[str, PhaseArtifact | dict[str, Any]] | object = _UNSET,
+        objective_card: ObjectiveCard | dict[str, Any] | None | object = _UNSET,
+        rounds: list[SearchRoundArtifact | dict[str, Any]] | object = _UNSET,
+        selected_candidate_id: str | None | object = _UNSET,
+        final_review: EvaluationReport | dict[str, Any] | None | object = _UNSET,
         approval_required: bool | None = None,
         approval_payload: ApprovalPayload | dict[str, Any] | None | object = _UNSET,
         request_text: str | None | object = _UNSET,
-        current_stage: str | None = None,
+        current_round: str | None = None,
+        current_focus: FocusKey | str | None = None,
         current_message: str | None = None,
         status: JobStatus | None = None,
         error: str | None | object = _UNSET,
@@ -172,12 +188,22 @@ class JobStore:
             record.eval_report = coerce_eval_report(eval_report if isinstance(eval_report, (dict, EvaluationReport)) or eval_report is None else None)
         if execution_trace is not _UNSET:
             record.execution_trace = coerce_execution_trace(execution_trace if isinstance(execution_trace, list) else [])
+        if final_execution_trace is not _UNSET:
+            record.final_execution_trace = coerce_execution_trace(final_execution_trace if isinstance(final_execution_trace, list) else [])
         if segmentation_trace is not _UNSET:
             record.segmentation_trace = coerce_segmentation_trace(segmentation_trace if isinstance(segmentation_trace, list) else [])
         if fallback_trace is not _UNSET:
             record.fallback_trace = coerce_fallback_trace(fallback_trace if isinstance(fallback_trace, list) else [])
-        if phases is not _UNSET:
-            record.phases = coerce_phase_artifacts(phases if isinstance(phases, dict) else {})
+        if objective_card is not _UNSET:
+            record.objective_card = coerce_objective_card(
+                objective_card if isinstance(objective_card, (dict, ObjectiveCard)) or objective_card is None else None
+            )
+        if rounds is not _UNSET:
+            record.rounds = coerce_search_rounds(rounds if isinstance(rounds, list) else [])
+        if selected_candidate_id is not _UNSET:
+            record.selected_candidate_id = selected_candidate_id if isinstance(selected_candidate_id, str) or selected_candidate_id is None else record.selected_candidate_id
+        if final_review is not _UNSET:
+            record.final_review = coerce_eval_report(final_review if isinstance(final_review, (dict, EvaluationReport)) or final_review is None else None)
         if approval_required is not None:
             record.approval_required = approval_required
         if approval_payload is not _UNSET:
@@ -186,8 +212,10 @@ class JobStore:
             )
         if request_text is not _UNSET:
             record.request_text = request_text if isinstance(request_text, str) or request_text is None else record.request_text
-        if current_stage is not None:
-            record.current_stage = current_stage
+        if current_round is not None:
+            record.current_round = current_round
+        if current_focus is not None:
+            record.current_focus = current_focus  # type: ignore[assignment]
         if current_message is not None:
             record.current_message = current_message
         if status is not None:
@@ -204,7 +232,8 @@ class JobStore:
         *,
         status: JobStatus,
         approval_required: bool,
-        current_stage: str,
+        current_round: str,
+        current_focus: FocusKey | str | None,
         current_message: str,
         error: str | None = None,
         error_detail: dict[str, Any] | None = None,
@@ -215,7 +244,8 @@ class JobStore:
             job_id,
             status,
             approval_required=approval_required,
-            current_stage=current_stage,
+            current_round=current_round,
+            current_focus=current_focus,
             current_message=current_message,
             error=error,
             error_detail=error_detail,
@@ -233,15 +263,18 @@ class JobStore:
         job_id: str,
         item: JobEvent | dict[str, Any],
         *,
-        current_stage: str | None = None,
+        current_round: str | None = None,
+        current_focus: FocusKey | str | None = None,
         current_message: str | None = None,
     ) -> JobRecord:
         """Append a progress event to the job."""
 
         current = self.require(job_id)
         current.events.extend(coerce_job_events([item]))
-        if current_stage is not None:
-            current.current_stage = current_stage
+        if current_round is not None:
+            current.current_round = current_round
+        if current_focus is not None:
+            current.current_focus = current_focus  # type: ignore[assignment]
         if current_message is not None:
             current.current_message = current_message
         return self._touch(current)

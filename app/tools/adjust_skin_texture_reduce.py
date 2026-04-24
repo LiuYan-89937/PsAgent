@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_skin_smooth
 
 
@@ -23,6 +23,7 @@ def adjust_skin_texture_reduce(
 ) -> dict:
     """Use this tool when fine skin texture should be softened while preserving larger edges and overall tone structure. It is a local skin-detail softening tool and should be used with a skin mask instead of the whole frame."""
 
+    require_mask_path("adjust_skin_texture_reduce", mask_path, recommended_prompt="skin")
     output_path = temp_output_path("psagent_skin_texture_reduce_")
     smooth_strength = min(max(radius / 8.0, 0.1), 1.0) * amount
     saved_path = apply_skin_smooth(
@@ -55,7 +56,7 @@ ADJUST_SKIN_TEXTURE_REDUCE_SPEC = ToolSpec(
     label="皮肤纹理减弱",
     description="Reduce fine skin texture while preserving tone and edges.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

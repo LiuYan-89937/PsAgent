@@ -57,7 +57,7 @@ def _tool_candidate_text(spec) -> str:
         spec.label,
         spec.description,
         spec.family,
-        " ".join(spec.stage_affinity),
+        " ".join(spec.focus_affinity),
         "masked_region" if spec.supports_mask else "",
         "whole_image" if spec.supports_whole_image else "",
         " ".join(sorted(_generated_aliases(spec.name))),

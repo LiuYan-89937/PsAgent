@@ -89,12 +89,12 @@ ADJUST_EXPOSURE_SPEC = ToolSpec(
     label="曝光",
     description="Adjust whole-image or masked exposure with stable strength semantics.",
     family="tone",
-    stage_affinity=[
-        "technical_prep",
-        "global_base",
-        "local_balance",
-        "subject_refine",
-        "finish_output",
+    focus_affinity=[
+        "global_tone",
+        "global_tone",
+        "subject_separation",
+        "subject_cleanup",
+        "finish",
     ],
     supports_mask=True,
     supports_whole_image=True,

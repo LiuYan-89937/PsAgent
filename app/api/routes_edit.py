@@ -12,7 +12,7 @@ from app.api.runtime import (
     append_job_event,
     build_error_detail,
     collect_terminal_status,
-    compute_stage_timings,
+    compute_round_timings,
     format_sse,
     iter_graph_events,
     make_event,
@@ -21,12 +21,10 @@ from app.api.runtime import (
 from app.api.routes_assets import _build_asset_response
 from app.api.routes_jobs import (
     _build_execution_trace_payload,
-    _build_phase_payloads,
+    _build_round_payloads,
     _build_segmentation_trace_payload,
-    _dump_feedback_items,
     _dump_fallback_trace,
     _dump_job_events,
-    _dump_segmentation_trace,
     _build_job_summary,
 )
 from app.api.schemas import EditRequest, EditResponse
@@ -60,7 +58,7 @@ async def edit(
             run.job.job_id,
             "failed",
             error=str(exc),
-            error_detail=build_error_detail(exc, stage=job_store.require(run.job.job_id).current_stage),
+            error_detail=build_error_detail(exc, node=job_store.require(run.job.job_id).current_round),
         )
         raise HTTPException(status_code=500, detail=failed.error) from exc
 
@@ -71,7 +69,8 @@ async def edit(
         job_id=run.job.job_id,
         final_state=final_state,
         status=status,
-        current_stage="completed" if status == "completed" else "human_review",
+        current_round="completed" if status == "completed" else "human_review",
+        current_focus=None,
         current_message="任务完成" if status == "completed" else "等待人工确认",
     )
     completed = finalized.job
@@ -96,9 +95,13 @@ async def edit(
         execution_trace=_build_execution_trace_payload(request, completed.execution_trace, asset_store),
         segmentation_trace=_build_segmentation_trace_payload(request, completed.segmentation_trace, asset_store),
         fallback_trace=_dump_fallback_trace(completed.fallback_trace),
-        phases=_build_phase_payloads(request, completed.phases, asset_store),
+        objective_card=completed.objective_card,
+        rounds=_build_round_payloads(request, completed.rounds, asset_store),
+        selected_candidate_id=completed.selected_candidate_id,
+        final_review=completed.final_review,
+        final_execution_trace=_build_execution_trace_payload(request, completed.final_execution_trace, asset_store),
         events=_dump_job_events(completed.events),
-        stage_timings=compute_stage_timings(completed.events),
+        round_timings=compute_round_timings(completed.events),
     )
 
 
@@ -121,7 +124,7 @@ async def edit_stream(
         created_event = make_event(
             "job_created",
             job_id=run.job.job_id,
-            stage="queued",
+            round="queued",
             message="任务已创建，准备开始处理",
         )
         created_event = append_job_event(job_store, run.job.job_id, created_event)
@@ -140,8 +143,7 @@ async def edit_stream(
             current = job_store.require(run.job.job_id)
             error_detail = build_error_detail(
                 exc,
-                stage=current.current_stage,
-                node=current.current_stage,
+                node=current.current_round,
                 extra={
                     "last_event": current.events[-1] if current.events else None,
                 },
@@ -151,13 +153,14 @@ async def edit_stream(
                 "failed",
                 error=str(exc),
                 error_detail=error_detail,
-                current_stage="failed",
+                current_round="failed",
+                current_focus=None,
                 current_message="任务执行失败",
             )
             error_event = make_event(
                 "job_failed",
                 job_id=run.job.job_id,
-                stage="failed",
+                round="failed",
                 message="任务执行失败",
                 error=failed.error,
                 error_detail=error_detail,
@@ -174,7 +177,8 @@ async def edit_stream(
             job_id=run.job.job_id,
             final_state=final_state,
             status=status,
-            current_stage="completed" if status == "completed" else "human_review" if status == "review_required" else "failed",
+            current_round="completed" if status == "completed" else "human_review" if status == "review_required" else "failed",
+            current_focus=None,
             current_message="任务完成" if status == "completed" else "等待人工确认" if status == "review_required" else "任务失败",
         )
         completed = finalized.job
@@ -183,7 +187,7 @@ async def edit_stream(
             event = make_event(
                 "job_interrupted",
                 job_id=completed.job_id,
-                stage="human_review",
+                round="human_review",
                 message="任务已暂停，等待人工确认",
                 approval_payload=final_state.get("approval_payload"),
             )
@@ -194,7 +198,7 @@ async def edit_stream(
         event = make_event(
             "job_completed",
             job_id=completed.job_id,
-            stage="completed",
+            round="completed",
             message="任务处理完成",
             selected_output_asset_id=completed.output_asset_ids[-1] if completed.output_asset_ids else None,
         )

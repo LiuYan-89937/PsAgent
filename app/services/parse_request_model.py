@@ -27,8 +27,9 @@ def generate_request_intent_with_qwen(
             "工具目录": compact_tool_catalog_for_model(tool_catalog, include_params=False),
             "补充要求": [
                 "只做需求归一化，不要生成最终 edit plan",
+                "优先输出 goals，普通自然语言不要硬映射成具体工具",
+                "requested_tools 只在用户明确点名工具或说用某工具时填写",
                 "全图请求用 whole_image，局部请求用动态区域标签",
-                "requested_packages 只保留高层意图，不要过度展开",
                 "只返回 JSON",
             ],
         },

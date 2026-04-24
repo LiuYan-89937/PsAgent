@@ -121,7 +121,7 @@ class SegmentationToolsTest(unittest.TestCase):
         mocked_fal.assert_called_once()
         mocked_aliyun.assert_not_called()
 
-    def test_ensure_region_mask_background_with_fal_uses_direct_background_prompt_first(self) -> None:
+    def test_ensure_region_mask_background_with_fal_uses_inverse_person_prompt(self) -> None:
         with patch(
             "app.tools.segmentation_tools.generate_fal_sam3_mask",
             return_value=self._result("fal_sam3"),
@@ -134,14 +134,11 @@ class SegmentationToolsTest(unittest.TestCase):
             )
 
         self.assertEqual(mask_path, self.mask_path)
-        self.assertEqual(mocked_fal.call_args.kwargs["prompt"], "background")
-        self.assertFalse(mocked_fal.call_args.kwargs["revert_mask"])
+        self.assertEqual(mocked_fal.call_args.kwargs["prompt"], "person")
+        self.assertTrue(mocked_fal.call_args.kwargs["revert_mask"])
 
-    def test_resolve_region_mask_background_retries_with_inverse_foreground_attempts(self) -> None:
+    def test_resolve_region_mask_background_uses_inverse_person_strategy(self) -> None:
         def side_effect(*args, **kwargs):
-            prompt = kwargs.get("prompt")
-            if prompt == "background":
-                raise FalImageSegError("fal segmentation response did not include an output image URL.")
             return self._result("fal_sam3")
 
         with patch(
@@ -158,18 +155,33 @@ class SegmentationToolsTest(unittest.TestCase):
 
         self.assertEqual(result.binary_mask_path, self.mask_path)
         self.assertTrue(result.fallback_used)
-        self.assertEqual(result.attempt_index, 1)
-        self.assertEqual(result.attempt_strategy, "invert_person")
+        self.assertEqual(result.attempt_strategy, "invert_person_for_background")
         self.assertEqual(result.requested_prompt, "background")
         self.assertEqual(result.effective_prompt, "person")
         self.assertTrue(result.revert_mask)
-        self.assertEqual(len(result.attempts), 2)
-        first_call = mocked_ensure.call_args_list[0].kwargs
-        second_call = mocked_ensure.call_args_list[1].kwargs
-        self.assertEqual(first_call["prompt"], "background")
-        self.assertFalse(first_call["revert_mask"])
-        self.assertEqual(second_call["prompt"], "person")
-        self.assertTrue(second_call["revert_mask"])
+        self.assertEqual(len(result.attempts), 0)
+        only_call = mocked_ensure.call_args.kwargs
+        self.assertEqual(only_call["prompt"], "person")
+        self.assertTrue(only_call["revert_mask"])
+
+    def test_resolve_region_mask_subject_uses_coarse_main_subject_region(self) -> None:
+        with patch(
+            "app.tools.segmentation_tools._ensure_aliyun_region_mask",
+            return_value=self._result("aliyun"),
+        ) as mocked_aliyun:
+            result = resolve_region_mask(
+                self.image_path,
+                "主体区域",
+                provider="fal_sam3",
+                prompt="subject",
+                output_dir=self.tmpdir.name,
+            )
+
+        self.assertEqual(result.provider, "aliyun")
+        self.assertTrue(result.fallback_used)
+        self.assertEqual(result.attempt_strategy, "aliyun_main_subject_region")
+        self.assertEqual(result.requested_prompt, "subject")
+        self.assertEqual(mocked_aliyun.call_args.args[1], "main_subject")
 
     def test_native_tool_schema_includes_mask_prompt_fields(self) -> None:
         schema = require_tool_spec("adjust_exposure").planner_schema
@@ -261,6 +273,14 @@ class SegmentationToolsTest(unittest.TestCase):
         binary_mask = Image.open(result.binary_mask_path).convert("L")
         self.assertEqual(binary_mask.getpixel((16, 16)), 255)
         self.assertEqual(binary_mask.getpixel((2, 2)), 0)
+
+    def test_generate_fal_sam3_mask_rejects_abstract_prompt(self) -> None:
+        with self.assertRaises(FalImageSegError):
+            generate_fal_sam3_mask(
+                self.image_path,
+                prompt="background",
+                output_dir=self.tmpdir.name,
+            )
 
     def test_normalize_segmentation_prompt_label_returns_short_english_tokens(self) -> None:
         self.assertEqual(normalize_segmentation_prompt_label("背景的树林和草地绿色植被", region="background"), "trees")

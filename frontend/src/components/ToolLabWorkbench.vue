@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   generateToolLabMask,
-  listPackages,
+  listTools,
   runToolLab,
   uploadAssets,
 } from '@/lib/api'
@@ -344,7 +344,7 @@ const activeComparison = computed(() => {
 onMounted(async () => {
   catalogLoading.value = true
   try {
-    const catalog = await listPackages()
+    const catalog = await listTools()
     toolCatalog.value = catalog.items
   } catch (error) {
     catalogError.value = error instanceof Error ? error.message : '工具目录加载失败。'
@@ -534,7 +534,7 @@ onMounted(async () => {
             <div class="compare-label">{{ activeComparison?.title }}</div>
           </div>
 
-          <div v-if="activeComparison" class="compare-stage">
+          <div v-if="activeComparison" class="compare-slot">
             <div class="compare-pane">
               <span class="compare-badge">Before</span>
               <img :src="activeComparison.beforeUrl" alt="Before" class="compare-image" />
@@ -826,7 +826,7 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-.compare-stage {
+.compare-slot {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
@@ -967,7 +967,7 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
-  .compare-stage {
+  .compare-slot {
     grid-template-columns: 1fr;
   }
 }

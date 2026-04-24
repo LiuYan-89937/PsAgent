@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_skin_smooth
 
 
@@ -23,6 +23,7 @@ def adjust_skin_smooth(
 ) -> dict:
     """Use this tool when skin should look smoother and more polished while preserving edges and major facial structure. It is a skin-only local retouch tool, so it should be paired with a skin mask and not applied to the full image."""
 
+    require_mask_path("adjust_skin_smooth", mask_path, recommended_prompt="skin")
     output_path = temp_output_path("psagent_skin_smooth_")
     saved_path = apply_skin_smooth(
         image_path,
@@ -54,7 +55,7 @@ ADJUST_SKIN_SMOOTH_SPEC = ToolSpec(
     label="皮肤柔化",
     description="Apply restrained skin smoothing with detail protection.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

@@ -18,7 +18,8 @@ def update_memory(state: EditState) -> dict:
         except ValidationError as error:
             fallback_trace = append_fallback_trace(
                 fallback_trace,
-                stage="update_memory",
+                round_id=None,
+                focus=None,
                 source="memory_candidates",
                 location="memory_write_candidates",
                 strategy="drop_invalid_memory_candidate",

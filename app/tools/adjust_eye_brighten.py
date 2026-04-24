@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_eye_brighten_adjustment
 
 
@@ -23,6 +23,7 @@ def adjust_eye_brighten(
 ) -> dict:
     """Use this tool when eyes should look brighter, clearer, and more alive through subtle lift, clarity, saturation, or catchlight emphasis. It is an eye-region portrait tool and should be paired with an eye mask instead of being applied across the whole image."""
 
+    require_mask_path("adjust_eye_brighten", mask_path, recommended_prompt="eye")
     output_path = temp_output_path("psagent_eye_brighten_")
     saved_path = apply_eye_brighten_adjustment(
         image_path,
@@ -54,7 +55,7 @@ ADJUST_EYE_BRIGHTEN_SPEC = ToolSpec(
     label="眼睛提亮",
     description="Brighten eyes and lightly boost clarity, saturation, and catchlights.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

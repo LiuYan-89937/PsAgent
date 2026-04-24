@@ -19,136 +19,192 @@ class FakeGraph:
         self.output_dir = output_dir
         self.last_payload: dict | None = None
 
-    def invoke(self, payload: dict, config=None) -> dict:
-        self.last_payload = payload
-        output_path = self.output_dir / "fake_output.png"
-        Image.new("RGB", (16, 16), (180, 120, 80)).save(output_path)
-        request_text = payload.get("request_text") or ("auto generated instruction" if payload.get("mode") == "auto" else None)
+    def _step(self, region: str) -> dict:
+        return {
+            "op": "adjust_exposure",
+            "region": region,
+            "params": {"strength": 0.2},
+            "constraints": [],
+            "priority": 0,
+        }
+
+    def _trace(self, output_path: Path | str, region: str) -> list[dict]:
+        return [
+            {
+                "index": 0,
+                "round_id": "round_1",
+                "focus": "finish",
+                "candidate_id": "round_1_candidate_1",
+                "op": "adjust_exposure",
+                "region": region,
+                "ok": True,
+                "fallback_used": False,
+                "error": None,
+                "output_image": str(output_path),
+                "applied_params": {"strength": 0.2},
+                "mask_path": None,
+            }
+        ]
+
+    def _eval_report(self, output_path: Path | str) -> dict:
+        return {
+            "selected_output": str(output_path),
+            "num_operations": 1,
+            "success_count": 1,
+            "failure_count": 0,
+            "fallback_count": 0,
+            "has_output": True,
+            "overall_ok": True,
+            "preserve_ok": True,
+            "style_ok": True,
+            "artifact_ok": True,
+            "issues": [],
+            "warnings": [],
+            "summary": "ok",
+            "should_continue_editing": False,
+            "should_request_review": False,
+        }
+
+    def _rounds(self, output_path: Path | str, mode: str, region: str) -> list[dict]:
+        step = self._step(region)
+        trace = self._trace(output_path, region)
+        candidate_id = "round_1_candidate_1"
+        execution = {
+            "input_image_path": None,
+            "output_image_path": str(output_path),
+            "output_asset_id": None,
+            "execution_trace": trace,
+            "segmentation_trace": [],
+            "fallback_trace": [],
+        }
+        review = {
+            "overall_ok": True,
+            "preserve_ok": True,
+            "style_ok": True,
+            "artifact_ok": True,
+            "issues": [],
+            "warnings": [],
+            "summary": "候选自然可用。",
+            "recommended_action": "keep",
+            "score": 0.92,
+        }
+        return [
+            {
+                "id": "round_1",
+                "index": 1,
+                "focus": "finish",
+                "input_image_path": None,
+                "output_image_path": str(output_path),
+                "objective_gaps": [
+                    {
+                        "id": "gap_finish",
+                        "focus": "finish",
+                        "description": "完成基础曝光调整。",
+                        "priority": 80,
+                        "target_region": region,
+                        "desired_delta": "slightly brighter",
+                        "constraints": [],
+                        "resolved": True,
+                    }
+                ],
+                "candidates": [
+                    {
+                        "candidate_id": candidate_id,
+                        "label": "direct candidate" if mode != "auto" else "search candidate",
+                        "focus": "finish",
+                        "selected": True,
+                        "eliminated_reason": None,
+                        "program": {
+                            "id": candidate_id,
+                            "label": "direct candidate" if mode != "auto" else "search candidate",
+                            "focus": "finish",
+                            "source": "direct" if mode != "auto" else "rule",
+                            "summary": "轻微提亮。",
+                            "steps": [step],
+                            "is_recovery": False,
+                        },
+                        "preview_execution": execution,
+                        "review": review,
+                    }
+                ],
+                "selected_candidate_id": candidate_id,
+                "selected_full_execution": execution,
+                "round_review": {
+                    "overall_ok": True,
+                    "issues": [],
+                    "warnings": [],
+                    "summary": "本轮结果可保留。",
+                    "recommended_action": "keep",
+                    "score": 0.92,
+                },
+                "recovery_decision": {
+                    "triggered": False,
+                    "source": "none",
+                    "fallback_aware": False,
+                    "reason": "",
+                    "candidate_ids": [],
+                    "selected_candidate_id": None,
+                },
+                "recovery_candidates": [],
+                "completed": True,
+            }
+        ]
+
+    def _graph_state(self, payload: dict, output_path: Path | str, region: str) -> dict:
+        mode = payload.get("mode", "explicit")
+        request_text = payload.get("request_text") or ("auto generated instruction" if mode == "auto" else None)
+        trace = self._trace(output_path, region)
+        rounds = self._rounds(output_path, mode, region)
+        eval_report = self._eval_report(output_path)
         return {
             "candidate_outputs": [str(output_path)],
             "selected_output": str(output_path),
             "request_text": request_text,
             "edit_plan": {
-                "mode": payload.get("mode", "explicit"),
+                "mode": mode,
                 "domain": "general",
                 "executor": "deterministic",
                 "preserve": [],
-                "operations": [
-                    {
-                        "op": "adjust_exposure",
-                        "region": "whole_image",
-                        "params": {"strength": 0.2},
-                        "constraints": [],
-                        "priority": 0,
-                    }
-                ],
+                "operations": [self._step(region)],
                 "should_write_memory": False,
                 "memory_candidates": [],
                 "needs_confirmation": False,
             },
-            "eval_report": {
-                "selected_output": str(output_path),
-                "num_operations": 1,
-                "success_count": 1,
-                "failure_count": 0,
-                "fallback_count": 0,
-                "has_output": True,
-                "overall_ok": True,
-                "preserve_ok": True,
-                "style_ok": True,
-                "artifact_ok": True,
-                "issues": [],
-                "warnings": [],
-                "summary": "ok",
-                "should_continue_editing": False,
-                "should_request_review": False,
+            "objective_card": {
+                "summary": request_text or "自动修图目标",
+                "mode": mode,
+                "domain": "general",
+                "preserve": [],
+                "goals": [
+                    {
+                        "kind": "tone",
+                        "target_region": region,
+                        "priority": 80,
+                        "intensity": 0.2,
+                        "constraints": [],
+                        "source": "heuristic",
+                    }
+                ],
+                "gaps": rounds[0]["objective_gaps"],
+                "constraints": [],
             },
-            "execution_trace": [
-                {
-                    "index": 0,
-                    "stage": "finish_output",
-                    "op": "adjust_exposure",
-                    "region": "whole_image",
-                    "ok": True,
-                    "fallback_used": False,
-                    "error": None,
-                    "output_image": str(output_path),
-                    "applied_params": {"strength": 0.2},
-                    "mask_path": None,
-                }
-            ],
-            "phases": {
-                "finish_output": {
-                    "key": "finish_output",
-                    "label": "最终收尾",
-                    "plan": {
-                        "mode": payload.get("mode", "explicit"),
-                        "domain": "general",
-                        "executor": "deterministic",
-                        "preserve": [],
-                        "steps": [
-                            {
-                                "op": "adjust_exposure",
-                                "region": "whole_image",
-                                "params": {"strength": 0.2},
-                                "constraints": [],
-                                "priority": 0,
-                            }
-                        ],
-                        "step_budget": 4,
-                        "summary": "首轮基础校正完成。",
-                        "should_write_memory": False,
-                        "memory_candidates": [],
-                        "needs_confirmation": False,
-                    },
-                    "execution_trace": [
-                        {
-                            "index": 0,
-                            "stage": "finish_output",
-                            "op": "adjust_exposure",
-                            "region": "whole_image",
-                            "ok": True,
-                            "fallback_used": False,
-                            "error": None,
-                            "output_image": str(output_path),
-                            "applied_params": {"strength": 0.2},
-                            "mask_path": None,
-                        }
-                    ],
-                    "segmentation_trace": [],
-                    "eval_report": {
-                        "selected_output": str(output_path),
-                        "num_operations": 1,
-                        "success_count": 1,
-                        "failure_count": 0,
-                        "fallback_count": 0,
-                        "has_output": True,
-                        "overall_ok": True,
-                        "preserve_ok": True,
-                        "style_ok": True,
-                        "artifact_ok": True,
-                        "issues": [],
-                        "warnings": [],
-                        "summary": "ok",
-                        "should_continue_editing": False,
-                        "should_request_review": False,
-                    },
-                    "output": {"image_path": str(output_path)},
-                    "summary": {
-                        "stage": "finish_output",
-                        "summary": "最终收尾完成。",
-                        "used_tools": ["adjust_exposure"],
-                        "key_changes": ["adjust_exposure"],
-                        "remaining_issues": [],
-                    },
-                    "skipped": False,
-                    "skip_reason": None,
-                    "trigger_reasons": [],
-                    "stopped_early": False,
-                }
-            },
+            "eval_report": eval_report,
+            "final_review": eval_report,
+            "execution_trace": trace,
+            "final_execution_trace": trace,
+            "segmentation_trace": [],
+            "fallback_trace": [],
+            "rounds": rounds,
+            "selected_candidate_id": rounds[0]["selected_candidate_id"],
             "approval_required": False,
+            "approval_payload": None,
         }
+
+    def invoke(self, payload: dict, config=None) -> dict:
+        self.last_payload = payload
+        output_path = self.output_dir / "fake_output.png"
+        Image.new("RGB", (16, 16), (180, 120, 80)).save(output_path)
+        return self._graph_state(payload, output_path, "whole_image")
 
     def stream(self, payload, config=None, stream_mode=None, version=None):
         if isinstance(payload, dict):
@@ -167,10 +223,15 @@ class FakeGraph:
         yield ("tasks", {"name": "analyze_image", "input": {"x": 1}, "triggers": ("start",)})
         yield ("updates", {"analyze_image": {"domain": "general"}})
         yield ("tasks", {"name": "analyze_image", "result": {"domain": "general"}, "error": None, "interrupts": []})
-        yield ("custom", {"event": "stage_started", "stage": "global_base", "round": "global_base", "message": "开始全局基线"})
-        yield ("custom", {"event": "package_started", "stage": "global_base", "op": "adjust_exposure", "region": "main_subject", "message": "正在执行 adjust_exposure"})
-        yield ("custom", {"event": "package_finished", "stage": "global_base", "op": "adjust_exposure", "region": "main_subject", "ok": True, "message": "adjust_exposure 执行完成"})
-        yield ("custom", {"event": "stage_completed", "stage": "global_base", "round": "global_base", "message": "全局基线已完成"})
+        yield ("custom", {"event": "round_started", "round": "round_1", "focus": "finish", "message": "开始搜索 round_1"})
+        yield ("custom", {"event": "candidate_generated", "round": "round_1", "focus": "finish", "payload": {"candidate_id": "round_1_candidate_1"}, "message": "已生成候选方案"})
+        yield ("custom", {"event": "candidate_preview_started", "round": "round_1", "focus": "finish", "payload": {"candidate_id": "round_1_candidate_1"}, "message": "开始预览候选方案"})
+        yield ("custom", {"event": "tool_started", "round": "round_1", "focus": "finish", "op": "adjust_exposure", "region": "main_subject", "message": "正在执行 adjust_exposure"})
+        yield ("custom", {"event": "tool_finished", "round": "round_1", "focus": "finish", "op": "adjust_exposure", "region": "main_subject", "ok": True, "message": "adjust_exposure 执行完成"})
+        yield ("custom", {"event": "candidate_preview_finished", "round": "round_1", "focus": "finish", "payload": {"candidate_id": "round_1_candidate_1"}, "message": "候选预览完成"})
+        yield ("custom", {"event": "candidate_selected", "round": "round_1", "focus": "finish", "payload": {"candidate_id": "round_1_candidate_1"}, "message": "已选择最佳候选"})
+        yield ("custom", {"event": "round_review_finished", "round": "round_1", "focus": "finish", "message": "本轮评估完成"})
+        yield ("custom", {"event": "round_completed", "round": "round_1", "focus": "finish", "message": "round_1 已完成"})
 
     def get_state(self, config=None):
         output_path = str(self.output_dir / "fake_output.png")
@@ -188,132 +249,14 @@ class FakeGraph:
             request_text = self.last_payload.get("request_text") or (
                 "auto generated instruction" if self.last_payload.get("mode") == "auto" else None
             )
-        snapshot.values = {
-            "candidate_outputs": [output_path],
-            "selected_output": output_path,
-            "request_text": request_text,
-            "edit_plan": {
+        snapshot.values = self._graph_state(
+            {
                 "mode": "explicit",
-                "domain": "general",
-                "executor": "hybrid",
-                "preserve": [],
-                "operations": [
-                    {
-                        "op": "adjust_exposure",
-                        "region": "main_subject",
-                        "params": {"strength": 0.2},
-                        "constraints": [],
-                        "priority": 0,
-                    }
-                ],
-                "should_write_memory": False,
-                "memory_candidates": [],
-                "needs_confirmation": False,
+                "request_text": request_text,
             },
-            "eval_report": {
-                "selected_output": output_path,
-                "num_operations": 1,
-                "success_count": 1,
-                "failure_count": 0,
-                "fallback_count": 0,
-                "has_output": True,
-                "overall_ok": True,
-                "preserve_ok": True,
-                "style_ok": True,
-                "artifact_ok": True,
-                "issues": [],
-                "warnings": [],
-                "summary": "ok",
-                "should_continue_editing": False,
-                "should_request_review": False,
-            },
-            "execution_trace": [
-                {
-                    "index": 0,
-                    "stage": "finish_output",
-                    "op": "adjust_exposure",
-                    "region": "main_subject",
-                    "ok": True,
-                    "fallback_used": False,
-                    "error": None,
-                    "output_image": output_path,
-                    "applied_params": {"strength": 0.2},
-                    "mask_path": None,
-                }
-            ],
-            "phases": {
-                "finish_output": {
-                    "key": "finish_output",
-                    "label": "最终收尾",
-                    "plan": {
-                        "mode": "explicit",
-                        "domain": "general",
-                        "executor": "hybrid",
-                        "preserve": [],
-                        "steps": [
-                            {
-                                "op": "adjust_exposure",
-                                "region": "main_subject",
-                                "params": {"strength": 0.2},
-                                "constraints": [],
-                                "priority": 0,
-                            }
-                        ],
-                        "step_budget": 4,
-                        "summary": "首轮基础校正完成。",
-                        "should_write_memory": False,
-                        "memory_candidates": [],
-                        "needs_confirmation": False,
-                    },
-                    "execution_trace": [
-                        {
-                            "index": 0,
-                            "stage": "finish_output",
-                            "op": "adjust_exposure",
-                            "region": "main_subject",
-                            "ok": True,
-                            "fallback_used": False,
-                            "error": None,
-                            "output_image": output_path,
-                            "applied_params": {"strength": 0.2},
-                            "mask_path": None,
-                        }
-                    ],
-                    "segmentation_trace": [],
-                    "eval_report": {
-                        "selected_output": output_path,
-                        "num_operations": 1,
-                        "success_count": 1,
-                        "failure_count": 0,
-                        "fallback_count": 0,
-                        "has_output": True,
-                        "overall_ok": True,
-                        "preserve_ok": True,
-                        "style_ok": True,
-                        "artifact_ok": True,
-                        "issues": [],
-                        "warnings": [],
-                        "summary": "ok",
-                        "should_continue_editing": False,
-                        "should_request_review": False,
-                    },
-                    "output": {"image_path": output_path},
-                    "summary": {
-                        "stage": "finish_output",
-                        "summary": "最终收尾完成。",
-                        "used_tools": ["adjust_exposure"],
-                        "key_changes": ["adjust_exposure"],
-                        "remaining_issues": [],
-                    },
-                    "skipped": False,
-                    "skip_reason": None,
-                    "trigger_reasons": [],
-                    "stopped_early": False,
-                }
-            },
-            "approval_required": False,
-            "approval_payload": None,
-        }
+            output_path,
+            "main_subject",
+        )
         return snapshot
 
 
@@ -360,8 +303,8 @@ class ApiRoutesTest(unittest.TestCase):
         catalog = self.client.get("/meta/tools")
         self.assertEqual(catalog.status_code, 200)
         self.assertTrue(catalog.json()["items"])
-        package_names = {item["name"] for item in catalog.json()["items"]}
-        self.assertEqual(package_names, {item["name"] for item in export_tool_catalog()})
+        tool_names = {item["name"] for item in catalog.json()["items"]}
+        self.assertEqual(tool_names, {item["name"] for item in export_tool_catalog()})
 
         legacy_catalog = self.client.get("/meta/packages")
         self.assertEqual(legacy_catalog.status_code, 200)
@@ -393,15 +336,18 @@ class ApiRoutesTest(unittest.TestCase):
         self.assertEqual(payload["job"]["status"], "completed")
         self.assertIsNotNone(payload["selected_output"])
         self.assertEqual(len(payload["candidate_outputs"]), 1)
-        self.assertIn("finish_output", payload["phases"])
-        self.assertIn("plan", payload["phases"]["finish_output"])
+        self.assertIn("rounds", payload)
+        self.assertNotIn("phases", payload)
+        self.assertEqual(payload["rounds"][0]["focus"], "finish")
+        self.assertEqual(payload["selected_candidate_id"], "round_1_candidate_1")
 
         job_id = payload["job"]["job_id"]
         job = self.client.get(f"/jobs/{job_id}")
         self.assertEqual(job.status_code, 200)
         self.assertEqual(job.json()["job"]["job_id"], job_id)
-        self.assertIn("finish_output", job.json()["phases"])
-        self.assertIn("stage_timings", job.json())
+        self.assertIn("rounds", job.json())
+        self.assertNotIn("phases", job.json())
+        self.assertIn("round_timings", job.json())
 
         feedback = self.client.post(
             "/feedback",
@@ -499,9 +445,14 @@ class ApiRoutesTest(unittest.TestCase):
 
         self.assertIn("event: job_created", body)
         self.assertIn("event: node_started", body)
-        self.assertIn("event: stage_started", body)
-        self.assertIn("event: package_started", body)
-        self.assertIn("event: stage_completed", body)
+        self.assertIn("event: round_started", body)
+        self.assertIn("event: candidate_generated", body)
+        self.assertIn("event: candidate_preview_started", body)
+        self.assertIn("event: candidate_preview_finished", body)
+        self.assertIn("event: candidate_selected", body)
+        self.assertIn("event: round_review_finished", body)
+        self.assertIn("event: tool_started", body)
+        self.assertIn("event: round_completed", body)
         self.assertIn("event: job_completed", body)
 
     def test_resume_review_placeholder(self) -> None:
@@ -515,7 +466,8 @@ class ApiRoutesTest(unittest.TestCase):
             job.job_id,
             status="review_required",
             approval_required=True,
-            current_stage="human_review",
+            current_round="human_review",
+            current_focus=None,
             current_message="等待人工确认",
         )
         response = self.client.post(

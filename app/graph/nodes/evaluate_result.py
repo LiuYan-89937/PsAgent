@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from pydantic import ValidationError
 
@@ -14,10 +15,9 @@ from app.graph.state import (
     coerce_edit_plan,
     coerce_execution_trace,
     coerce_image_analysis,
-    coerce_phase_artifacts,
 )
+from app.services.image_metrics import compute_image_metrics
 from app.services.critic_model import critic_model_available, evaluate_edit_result_with_qwen
-from app.services.stage_policy import STAGE_ORDER
 
 
 def _safe_image_analysis(state: EditState):
@@ -44,7 +44,7 @@ def _build_base_report(state: EditState) -> dict[str, Any]:
     """Build execution-fact based evaluation fields."""
 
     execution_trace = [item.model_dump(mode="json") for item in coerce_execution_trace(state.get("execution_trace") or [])]
-    return {
+    report = {
         "selected_output": state.get("selected_output"),
         "num_operations": len(execution_trace),
         "success_count": sum(1 for item in execution_trace if item.get("ok")),
@@ -52,6 +52,27 @@ def _build_base_report(state: EditState) -> dict[str, Any]:
         "fallback_count": sum(1 for item in execution_trace if item.get("fallback_used")),
         "has_output": bool(state.get("selected_output")),
     }
+    input_images = list(state.get("input_images") or [])
+    selected_output = state.get("selected_output")
+    if input_images and selected_output and Path(str(input_images[0])).exists() and Path(str(selected_output)).exists():
+        # 最终质检补一层确定性前后对比，专门捕捉“自动美化过头”这类模型 critic 可能漏掉的问题。
+        original_metrics = compute_image_metrics(str(input_images[0]))
+        edited_metrics = compute_image_metrics(str(selected_output))
+        warnings: list[str] = []
+        brightness_delta = edited_metrics["brightness_mean"] - original_metrics["brightness_mean"]
+        shadow_drop = original_metrics["shadow_ratio"] - edited_metrics["shadow_ratio"]
+        highlight_delta = edited_metrics["highlight_ratio"] - original_metrics["highlight_ratio"]
+        saturation_delta = edited_metrics["saturation_mean"] - original_metrics["saturation_mean"]
+        if brightness_delta > 18.0 and shadow_drop > 0.08:
+            warnings.append("输出黑位被明显抬高，可能出现暗部发灰或原图氛围丢失。")
+        if brightness_delta > 16.0 and saturation_delta < -0.03:
+            warnings.append("输出亮度上升但饱和度下降，存在奶白/灰雾风险。")
+        if highlight_delta > 0.08:
+            warnings.append("输出高光面积明显扩大，可能存在高光扩散或白场过推。")
+        if warnings:
+            report["warnings"] = warnings
+            report["should_request_review"] = True
+    return report
 
 
 def _run_critic(state: EditState) -> tuple[CriticResult | None, str | None]:
@@ -83,17 +104,26 @@ def _run_critic(state: EditState) -> tuple[CriticResult | None, str | None]:
 
 
 def final_review(state: EditState) -> dict[str, Any]:
-    """Produce the final evaluation report after all stages finish."""
+    """Produce the final evaluation report after search rounds finish."""
 
     base_report = _build_base_report(state)
+    deterministic_warnings = list(base_report.get("warnings") or [])
+    deterministic_review_required = bool(base_report.get("should_request_review"))
     critic, critic_error = _run_critic(state)
     fallback_trace = list(state.get("fallback_trace") or [])
     if critic is not None:
         base_report.update(critic.model_dump(mode="json"))
+        merged_warnings = list(base_report.get("warnings") or [])
+        for warning in deterministic_warnings:
+            if warning not in merged_warnings:
+                merged_warnings.append(warning)
+        base_report["warnings"] = merged_warnings
+        base_report["should_request_review"] = bool(base_report.get("should_request_review")) or deterministic_review_required
     elif critic_error:
         fallback_trace = append_fallback_trace(
             fallback_trace,
-            stage="final_review",
+            round_id=None,
+            focus=None,
             source="critic_model",
             location="eval_report",
             strategy="execution_only_evaluation",
@@ -102,25 +132,16 @@ def final_review(state: EditState) -> dict[str, Any]:
         )
 
     report = EvaluationReport.model_validate(base_report)
-    phases = dict(coerce_phase_artifacts(state.get("phases") or {}))
-    last_stage = next((stage for stage in reversed(STAGE_ORDER) if stage in phases), None)
-    if last_stage is not None:
-        phase = phases[last_stage]
-        phase.eval_report = report
-        phases[last_stage] = phase
-
     memory_candidates: list[dict[str, Any]] = []
-    for stage_key in STAGE_ORDER:
-        phase = phases.get(stage_key)
-        if phase is None or phase.plan is None or not phase.plan.should_write_memory:
-            continue
-        for item in phase.plan.memory_candidates:
+    edit_plan = _safe_edit_plan(state)
+    if edit_plan is not None and edit_plan.should_write_memory:
+        for item in edit_plan.memory_candidates:
             if item not in memory_candidates:
                 memory_candidates.append(item)
 
     return {
         "eval_report": report,
-        "phases": phases,
+        "final_review": report,
         "approval_required": bool(state.get("approval_required")) or bool(report.should_request_review),
         "approval_payload": coerce_approval_payload(state.get("approval_payload")),
         "fallback_trace": fallback_trace,

@@ -64,7 +64,7 @@ class ToolLabRoutesTest(unittest.TestCase):
             },
         )()
 
-        with patch("app.api.routes_tool_lab.resolve_region_mask", return_value=fake_result) as mocked_resolve:
+        with patch("app.api.routes_tool_lab.generate_mask", return_value=fake_result) as mocked_generate:
             response = self.client.post(
                 "/tool-lab/masks",
                 json={
@@ -80,7 +80,7 @@ class ToolLabRoutesTest(unittest.TestCase):
         self.assertEqual(payload["prompt"], "person")
         self.assertIn("mask_asset", payload)
         self.assertIn("preview_asset", payload)
-        mocked_resolve.assert_called_once()
+        mocked_generate.assert_called_once()
 
     def test_run_tool_lab_executes_one_masked_tool_step(self) -> None:
         upload = self.client.post(

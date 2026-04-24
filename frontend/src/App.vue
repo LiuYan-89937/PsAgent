@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount, watch } from 'vue'
-import { streamEdit, getJob, resumeReview } from '@/lib/api'
+import { streamEdit, streamJobEvents, getJob, resumeReview } from '@/lib/api'
 import type { AssetResponse, SseEventPayload, JobDetailResponse } from '@/types/api'
 
 import ImageUploader from '@/components/ImageUploader.vue'
@@ -205,10 +205,25 @@ async function handleResumeReview(approved: boolean, note: string) {
       approved,
       note
     })
-    // 恢复执行后，轮询或等待结果，因为当前没有重建 SSE。
-    // 在文档中提到：前端仍建议在恢复后重新拉一次任务详情。
-    // 为了体验，我们可以轮询 getJob 直到 completed/failed
-    pollJobStatus(currentJobId.value)
+    const jobId = currentJobId.value
+    void streamJobEvents(jobId, (eventName, data) => {
+      sseEvents.value.push(data)
+      if (eventName === 'job_status' && data.payload && typeof data.payload === 'object') {
+        const status = (data.payload as Record<string, unknown>).status
+        if (status === 'completed') {
+          void fetchJobDetailAndComplete()
+        } else if (status === 'failed') {
+          errorMsg.value = '任务最终执行失败'
+          errorDetail.value = (data.error_detail as Record<string, unknown> | undefined) || null
+          currentState.value = 'fatal_error'
+        } else if (status === 'review_required') {
+          void fetchJobDetailForReview()
+          currentState.value = 'review_required'
+        }
+      }
+    }).catch(() => {
+      pollJobStatus(jobId)
+    })
   } catch (err) {
     errorMsg.value = '从人工审核恢复失败'
     errorDetail.value = err instanceof Error ? { type: err.name, message: err.message } : null
@@ -365,16 +380,20 @@ onBeforeUnmount(() => {
             <h2>系统似乎遇到了一些问题</h2>
             <p style="color:var(--text-muted); margin-bottom:24px;">{{ errorMsg }}</p>
             <div v-if="errorDetail" class="error-detail-card">
-              <div v-if="errorDetail.stage" class="error-detail-row">
-                <span class="error-detail-label">阶段</span>
-                <span>{{ errorDetail.stage }}</span>
+              <div v-if="errorDetail.round" class="error-detail-row">
+                <span class="error-detail-label">轮次</span>
+                <span>{{ errorDetail.round }}</span>
+              </div>
+              <div v-if="errorDetail.focus" class="error-detail-row">
+                <span class="error-detail-label">焦点</span>
+                <span>{{ errorDetail.focus }}</span>
               </div>
               <div v-if="errorDetail.node" class="error-detail-row">
                 <span class="error-detail-label">节点</span>
                 <span>{{ errorDetail.node }}</span>
               </div>
               <div v-if="errorDetail.op" class="error-detail-row">
-                <span class="error-detail-label">工具包</span>
+                <span class="error-detail-label">工具</span>
                 <span>{{ errorDetail.op }}</span>
               </div>
               <div v-if="errorDetail.region" class="error-detail-row">

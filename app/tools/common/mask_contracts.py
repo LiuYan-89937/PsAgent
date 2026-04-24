@@ -28,7 +28,7 @@ MASK_PARAM_KEYS = frozenset(MASK_PARAM_TO_RUNTIME_KEY)
 
 
 class MaskParams(BaseModel):
-    """Shared planner-facing mask parameters handled by the stage runner."""
+    """Shared planner-facing mask parameters handled by the tool runtime."""
 
     # 这份 contract 的作用是：
     # 让所有工具共用一套 mask_* 语义，而不是每个工具各自发明一套。
@@ -42,7 +42,7 @@ class MaskParams(BaseModel):
         default=None,
         min_length=2,
         max_length=160,
-        description="Single visible English subject term for segmentation, e.g. face, hair, dress, background.",
+        description="Single visible English concrete noun for segmentation, e.g. face, hair, person, dress, bottle. Avoid abstract labels like background or subject.",
     )
     mask_negative_prompt: str | None = Field(
         default=None,
@@ -135,7 +135,7 @@ class MaskParams(BaseModel):
     def to_runtime_options(self) -> dict[str, Any]:
         """Convert validated mask params into segmentation runtime kwargs."""
 
-        # stage runner 最终调用 segmentation provider 时，
+        # tool runtime 最终调用 segmentation provider 时，
         # 用的就是这层转换后的 runtime 参数名。
         payload = self.model_dump(exclude_none=True)
         return {

@@ -45,8 +45,9 @@ async def resume_review(
             payload.job_id,
             "failed",
             error=str(exc),
-            error_detail=build_error_detail(exc, stage="human_review", node="human_review"),
-            current_stage="failed",
+            error_detail=build_error_detail(exc, node="human_review"),
+            current_round="failed",
+            current_focus=None,
             current_message="审核恢复失败",
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -59,12 +60,17 @@ async def resume_review(
         edit_plan=final_state.get("edit_plan"),
         eval_report=final_state.get("eval_report"),
         execution_trace=final_state.get("execution_trace") or [],
+        final_execution_trace=final_state.get("final_execution_trace") or final_state.get("execution_trace") or [],
         segmentation_trace=final_state.get("segmentation_trace") or [],
         fallback_trace=final_state.get("fallback_trace") or [],
-        phases=final_state.get("phases") or {},
+        objective_card=final_state.get("objective_card"),
+        rounds=final_state.get("rounds") or [],
+        selected_candidate_id=final_state.get("selected_candidate_id"),
+        final_review=final_state.get("final_review"),
         approval_required=bool(final_state.get("approval_required")),
         request_text=final_state.get("request_text"),
-        current_stage="completed" if payload.approved else "failed",
+        current_round="completed" if payload.approved else "failed",
+        current_focus=None,
         current_message="审核通过，任务完成" if payload.approved else "审核拒绝，任务结束",
     )
     append_job_event(
@@ -72,7 +78,7 @@ async def resume_review(
         payload.job_id,
         make_event(
             "review_resumed",
-            stage="human_review",
+            round="human_review",
             message="审核恢复完成",
             approved=payload.approved,
             note=payload.note,

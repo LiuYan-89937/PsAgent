@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_regional_enhancement
 
 
@@ -23,6 +23,7 @@ def adjust_skin_brightness(
 ) -> dict:
     """Use this tool when skin should look cleaner, brighter, and more flattering without losing too much texture. It is a skin-region local retouch tool and should be used with a skin mask rather than as a whole-image brightening step."""
 
+    require_mask_path("adjust_skin_brightness", mask_path, recommended_prompt="skin")
     output_path = temp_output_path("psagent_skin_brightness_")
     saved_path = apply_regional_enhancement(
         image_path,
@@ -59,7 +60,7 @@ ADJUST_SKIN_BRIGHTNESS_SPEC = ToolSpec(
     label="皮肤亮度提纯",
     description="Brighten skin gently while suppressing dirty yellow and preserving texture.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

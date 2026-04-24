@@ -41,7 +41,7 @@ class NativeToolRegistryTest(unittest.TestCase):
 
         skin_smooth = next(item for item in catalog if item["name"] == "adjust_skin_smooth")
         self.assertEqual(skin_smooth["family"], "portrait")
-        self.assertIn("subject_refine", skin_smooth["stage_affinity"])
+        self.assertIn("subject_cleanup", skin_smooth["focus_affinity"])
 
         color_lookup = next(item for item in catalog if item["name"] == "apply_color_lookup")
         self.assertEqual(color_lookup["family"], "color")
@@ -51,6 +51,14 @@ class NativeToolRegistryTest(unittest.TestCase):
         self.assertTrue(teeth["requires_mask"])
         self.assertEqual(teeth["mask_policy"], "required")
         self.assertEqual(teeth["recommended_mask_prompt"], "teeth")
+        self.assertTrue(teeth["description"].startswith("Use this tool when"))
+
+    def test_every_registered_tool_is_exported_once(self) -> None:
+        tool_names = {spec.name for spec in TOOL_SPECS}
+        exported_tools = {item["name"] for item in export_tool_catalog()}
+
+        self.assertFalse(tool_names - exported_tools)
+        self.assertFalse(exported_tools - tool_names)
 
 
 if __name__ == "__main__":

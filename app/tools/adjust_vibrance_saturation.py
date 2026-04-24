@@ -134,12 +134,12 @@ ADJUST_VIBRANCE_SATURATION_SPEC = ToolSpec(
     label="自然饱和度",
     description="Adjust whole-image or masked vibrance and saturation in color space while protecting highlights, skin, and shadows.",
     family="color",
-    stage_affinity=[
-        "technical_prep",
-        "global_base",
-        "local_balance",
-        "subject_refine",
-        "finish_output",
+    focus_affinity=[
+        "global_tone",
+        "global_tone",
+        "subject_separation",
+        "subject_cleanup",
+        "finish",
     ],
     supports_mask=True,
     supports_whole_image=True,

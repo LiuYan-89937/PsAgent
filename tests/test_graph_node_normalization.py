@@ -22,13 +22,14 @@ class GraphNodeNormalizationTest(unittest.TestCase):
         result = load_context(
             {
                 "request_text": "轻微提亮",
-                "execution_trace": [{"ok": True, "stage": "seed"}],
+                "execution_trace": [{"ok": True, "round_id": "seed", "focus": "finish"}],
                 "memory_write_candidates": [],
             }
         )
 
         self.assertTrue(result["tool_catalog"])
-        self.assertEqual(result["execution_trace"][0]["stage"], "seed")
+        self.assertEqual(result["execution_trace"][0]["round_id"], "seed")
+        self.assertEqual(result["execution_trace"][0]["focus"], "finish")
         self.assertTrue(all("name" in item for item in result["tool_catalog"]))
 
     def test_parse_request_returns_valid_request_intent(self) -> None:
@@ -39,7 +40,8 @@ class GraphNodeNormalizationTest(unittest.TestCase):
 
         self.assertEqual(result["mode"], "explicit")
         self.assertEqual(result["request_intent"]["mode"], "explicit")
-        self.assertTrue(result["request_intent"]["requested_packages"])
+        self.assertTrue(result["request_intent"]["goals"])
+        self.assertFalse(result["request_intent"]["requested_tools"])
 
     def test_bootstrap_request_returns_normalized_request_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

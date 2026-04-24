@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_color_cleanup_adjustment
 
 
@@ -23,6 +23,7 @@ def adjust_face_color_cleanup(
 ) -> dict:
     """Use this tool when the face specifically has dirty yellow, green, magenta, or muddy color contamination and needs cleaner skin tone rendering. It is a face-region cleanup tool and should be paired with a face mask, not used globally."""
 
+    require_mask_path("adjust_face_color_cleanup", mask_path, recommended_prompt="face")
     output_path = temp_output_path("psagent_face_color_cleanup_")
     saved_path = apply_color_cleanup_adjustment(
         image_path,
@@ -55,7 +56,7 @@ ADJUST_FACE_COLOR_CLEANUP_SPEC = ToolSpec(
     label="面部脏色清理",
     description="Clean dirty yellow, green, and magenta casts in the face region.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

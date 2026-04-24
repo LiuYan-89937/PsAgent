@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_regional_enhancement
 
 
@@ -23,6 +23,7 @@ def adjust_under_eye_brighten(
 ) -> dict:
     """Use this tool when the under-eye area looks too dark, tired, or hollow and needs gentle lifting with softer contrast. It is a very localized portrait retouch tool and should be used only with an under-eye mask."""
 
+    require_mask_path("adjust_under_eye_brighten", mask_path, recommended_prompt="under eye")
     output_path = temp_output_path("psagent_under_eye_brighten_")
     saved_path = apply_regional_enhancement(
         image_path,
@@ -59,7 +60,7 @@ ADJUST_UNDER_EYE_BRIGHTEN_SPEC = ToolSpec(
     label="眼下提亮",
     description="Brighten under-eye shadows and soften harsh contrast in a restrained way.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

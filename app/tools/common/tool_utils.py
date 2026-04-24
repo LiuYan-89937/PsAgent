@@ -14,6 +14,15 @@ def temp_output_path(prefix: str) -> str:
     return tempfile.mktemp(prefix=prefix, suffix=".png")
 
 
+def require_mask_path(tool_name: str, mask_path: str | None, *, recommended_prompt: str | None = None) -> None:
+    """Raise when a local-only tool is invoked without a runtime mask."""
+
+    if mask_path:
+        return
+    prompt_hint = f" Generate or pass a '{recommended_prompt}' mask first." if recommended_prompt else ""
+    raise ValueError(f"{tool_name} requires mask_path for local-only execution.{prompt_hint}")
+
+
 def build_result(
     *,
     tool_name: str,

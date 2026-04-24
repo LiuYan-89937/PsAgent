@@ -182,7 +182,7 @@ EFFECT_TOOL_SPECS: tuple[ToolSpec, ...] = (
     ADJUST_SOFT_GLOW_SPEC,
 )
 
-# Portrait 工具默认面向主体精修，后续只在 subject_refine 暴露。
+# Portrait 工具默认面向主体精修，后续只在 subject_cleanup 暴露。
 PORTRAIT_NATIVE_TOOLS: tuple[BaseTool, ...] = (
     adjust_skin_smooth,
     adjust_skin_brightness,
@@ -231,6 +231,42 @@ TOOL_SPECS_BY_NAME = {spec.name: spec for spec in TOOL_SPECS}
 TOOLS_BY_NAME = {tool.name: tool for tool in NATIVE_TOOLS}
 
 
+_CONFLICT_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("adjust_exposure", "adjust_brightness", "adjust_whites_blacks", "adjust_glow_highlights", "adjust_soft_glow"),
+    ("adjust_vibrance_saturation", "adjust_hue_saturation", "adjust_color_mixer", "adjust_single_color_shift"),
+    ("adjust_sharpness", "adjust_clarity", "adjust_texture", "adjust_local_contrast"),
+    ("adjust_skin_smooth", "adjust_skin_texture_reduce", "adjust_soften_local_contrast"),
+)
+
+
+def _derived_conflict_tools(spec: ToolSpec) -> list[str]:
+    """Return tools that should not be stacked casually with this tool."""
+
+    conflicts = set(spec.conflict_tools)
+    for group in _CONFLICT_GROUPS:
+        if spec.name in group:
+            conflicts.update(name for name in group if name != spec.name)
+    return sorted(conflicts)
+
+
+def _derived_selection_guidance(spec: ToolSpec) -> str:
+    """Build a short model-facing tool selection hint."""
+
+    if spec.selection_guidance:
+        return spec.selection_guidance
+    if spec.family == "tone":
+        return "Use for tonal correction; avoid stacking several tone tools unless the prior result still has a measured issue."
+    if spec.family == "color":
+        return "Use for color correction or color styling; prefer targeted color tools when only one hue range is wrong."
+    if spec.family == "detail":
+        return "Use for texture, sharpness, haze, or noise issues; keep amounts conservative on portraits."
+    if spec.family == "portrait":
+        return "Use only when the matching human region is visible and a suitable mask is available."
+    if spec.family == "effects":
+        return "Use only as a finishing effect after tone and color are already stable."
+    return "Use when the request and image analysis match this tool's documented purpose."
+
+
 def require_tool(name: str) -> BaseTool:
     """Return a concrete tool or raise a clear error."""
 
@@ -264,11 +300,14 @@ def export_tool_catalog() -> list[dict[str, Any]]:
                 "label": spec.label,
                 "description": spec.description,
                 "family": spec.family,
-                "stage_affinity": list(spec.stage_affinity),
+                "focus_affinity": list(spec.focus_affinity),
                 "supports_mask": spec.supports_mask,
                 "requires_mask": spec.requires_mask,
                 "supports_whole_image": spec.supports_whole_image,
                 "recommended_mask_prompt": spec.recommended_mask_prompt,
+                "recommended_mask_prompts": list(spec.recommended_mask_prompts),
+                "selection_guidance": _derived_selection_guidance(spec),
+                "conflict_tools": _derived_conflict_tools(spec),
                 "default_params": dict(spec.default_params),
                 "planner_schema": spec.planner_schema,
                 "primary_param": spec.primary_param,

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from app.api.runtime import build_graph_config
 from app.api.schemas import EditRequest
-from app.graph.state import PhaseArtifact, PhaseOutputArtifact, coerce_phase_artifacts
+from app.graph.state import SearchRoundArtifact, coerce_search_rounds
 from app.services.asset_store import AssetStore
 from app.services.job_store import JobRecord, JobStore
 
@@ -85,37 +85,73 @@ def _attach_output_asset_ids_to_segmentation_trace(
     return payload
 
 
-def _attach_output_asset_ids_to_phases(
-    phases: dict[str, PhaseArtifact | dict[str, object]],
+def _attach_output_asset_ids_to_rounds(
+    rounds: list[SearchRoundArtifact | dict[str, object]],
     asset_store: AssetStore,
     output_records_by_path: dict[str, object],
-) -> dict[str, dict[str, object]]:
-    """Persist phase outputs and traces into JSON-safe phase payloads."""
+) -> list[dict[str, object]]:
+    """Persist round outputs, candidate previews, and traces into JSON-safe payloads."""
 
-    payload: dict[str, dict[str, object]] = {}
-    for phase_key, phase_value in coerce_phase_artifacts(phases).items():
-        phase = phase_value.model_dump(mode="json")
-        output_payload = dict(phase.get("output") or {})
-        image_path = output_payload.get("image_path")
-        if isinstance(image_path, str):
-            record = output_records_by_path.get(image_path)
+    payload: list[dict[str, object]] = []
+    for round_value in coerce_search_rounds(rounds):
+        round_payload = round_value.model_dump(mode="json")
+        output_image_path = round_payload.get("output_image_path")
+        if isinstance(output_image_path, str):
+            record = output_records_by_path.get(output_image_path)
             if record is None:
-                record = asset_store.save_generated(image_path)
-                output_records_by_path[image_path] = record
-            output_payload["asset_id"] = getattr(record, "asset_id", None)
-        phase["output"] = output_payload or None
-        execution_trace = phase.get("execution_trace")
-        if isinstance(execution_trace, list):
-            phase["execution_trace"] = _attach_output_asset_ids_to_trace(execution_trace, output_records_by_path)
-        segmentation_trace = phase.get("segmentation_trace")
-        if isinstance(segmentation_trace, list):
-            phase["segmentation_trace"] = _attach_output_asset_ids_to_segmentation_trace(
-                segmentation_trace,
-                asset_store,
-                output_records_by_path,
-            )
-        payload[phase_key] = phase
+                record = asset_store.save_generated(output_image_path)
+                output_records_by_path[output_image_path] = record
+            round_payload["output_asset_id"] = getattr(record, "asset_id", None)
+
+        full_execution = round_payload.get("selected_full_execution")
+        if isinstance(full_execution, dict):
+            _hydrate_execution_payload(full_execution, asset_store, output_records_by_path)
+            round_payload["selected_full_execution"] = full_execution
+
+        for key in ("candidates", "recovery_candidates"):
+            raw_candidates = round_payload.get(key)
+            if not isinstance(raw_candidates, list):
+                continue
+            hydrated_candidates: list[dict[str, object]] = []
+            for candidate in raw_candidates:
+                candidate_payload = dict(candidate) if isinstance(candidate, dict) else {}
+                execution_payload = candidate_payload.get("preview_execution")
+                if isinstance(execution_payload, dict):
+                    _hydrate_execution_payload(execution_payload, asset_store, output_records_by_path)
+                    candidate_payload["preview_execution"] = execution_payload
+                hydrated_candidates.append(candidate_payload)
+            round_payload[key] = hydrated_candidates
+        payload.append(round_payload)
     return payload
+
+
+def _hydrate_execution_payload(
+    execution_payload: dict[str, object],
+    asset_store: AssetStore,
+    output_records_by_path: dict[str, object],
+) -> None:
+    """Persist and annotate one candidate execution payload in-place."""
+
+    output_image_path = execution_payload.get("output_image_path")
+    if isinstance(output_image_path, str):
+        record = output_records_by_path.get(output_image_path)
+        if record is None:
+            record = asset_store.save_generated(output_image_path)
+            output_records_by_path[output_image_path] = record
+        execution_payload["output_asset_id"] = getattr(record, "asset_id", None)
+    candidate_execution_trace = execution_payload.get("execution_trace")
+    if isinstance(candidate_execution_trace, list):
+        execution_payload["execution_trace"] = _attach_output_asset_ids_to_trace(
+            candidate_execution_trace,
+            output_records_by_path,
+        )
+    candidate_seg_trace = execution_payload.get("segmentation_trace")
+    if isinstance(candidate_seg_trace, list):
+        execution_payload["segmentation_trace"] = _attach_output_asset_ids_to_segmentation_trace(
+            candidate_seg_trace,
+            asset_store,
+            output_records_by_path,
+        )
 
 
 def collect_input_image_paths(payload: EditRequest, asset_store: AssetStore) -> tuple[list[str], list[str]]:
@@ -175,7 +211,8 @@ def finalize_edit_run(
     asset_store: AssetStore,
     job_id: str,
     final_state: dict[str, Any],
-    current_stage: str | None,
+    current_round: str | None,
+    current_focus: str | None,
     current_message: str | None,
     status: str,
 ) -> FinalizedEditRun:
@@ -205,8 +242,12 @@ def finalize_edit_run(
         asset_store,
         output_records_by_path,
     )
-    phases = _attach_output_asset_ids_to_phases(
-        final_state.get("phases") or {},
+    final_execution_trace = _attach_output_asset_ids_to_trace(
+        final_state.get("final_execution_trace") or final_state.get("execution_trace") or [],
+        output_records_by_path,
+    )
+    rounds = _attach_output_asset_ids_to_rounds(
+        final_state.get("rounds") or [],
         asset_store,
         output_records_by_path,
     )
@@ -218,13 +259,18 @@ def finalize_edit_run(
         edit_plan=final_state.get("edit_plan"),
         eval_report=final_state.get("eval_report"),
         execution_trace=execution_trace,
+        final_execution_trace=final_execution_trace,
         segmentation_trace=segmentation_trace,
         fallback_trace=final_state.get("fallback_trace") or [],
-        phases=phases,
+        objective_card=final_state.get("objective_card"),
+        rounds=rounds,
+        selected_candidate_id=final_state.get("selected_candidate_id"),
+        final_review=final_state.get("final_review"),
         approval_required=bool(final_state.get("approval_required")),
         approval_payload=final_state.get("approval_payload"),
         request_text=final_state.get("request_text"),
-        current_stage=current_stage,
+        current_round=current_round,
+        current_focus=current_focus,
         current_message=current_message,
     )
     return FinalizedEditRun(job=completed, output_records_by_path=output_records_by_path)

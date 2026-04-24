@@ -50,6 +50,7 @@ TOOL_MASK_NAME = {
     "adjust_hair_enhance": "hair",
     "adjust_face_color_cleanup": "face",
     "adjust_skin_tone_balance": "skin",
+    "adjust_skin_texture_reduce": "skin",
     "adjust_color_cleanup": "face",
 }
 
@@ -279,21 +280,27 @@ class RealPortraitToolOutputsMixin(unittest.TestCase):
         tool_dir = OUTPUT_DIR / tool_name
         tool_dir.mkdir(parents=True, exist_ok=True)
 
-        whole_result = tool.invoke({"image_path": str(FIXTURE_IMAGE_PATH), **effect_args})
-        self.assertTrue(whole_result["ok"], tool_name)
-        whole_output_path = tool_dir / "whole.png"
-        shutil.copy2(whole_result["output_image"], whole_output_path)
-        self.assertTrue(whole_output_path.exists(), tool_name)
-        self.assertGreater(mean_abs_diff(str(FIXTURE_IMAGE_PATH), str(whole_output_path)), 0.03, tool_name)
-
         meta: dict[str, object] = {
             "tool": tool_name,
             "family": spec.family,
             "input_image": str(FIXTURE_IMAGE_PATH),
-            "whole_output": str(whole_output_path),
             "whole_params": effect_args,
             "supports_mask": spec.supports_mask,
+            "requires_mask": spec.requires_mask,
         }
+
+        if spec.requires_mask or not spec.supports_whole_image:
+            with self.assertRaises(Exception, msg=tool_name):
+                tool.invoke({"image_path": str(FIXTURE_IMAGE_PATH), **effect_args})
+            meta["whole_image_rejected"] = True
+        else:
+            whole_result = tool.invoke({"image_path": str(FIXTURE_IMAGE_PATH), **effect_args})
+            self.assertTrue(whole_result["ok"], tool_name)
+            whole_output_path = tool_dir / "whole.png"
+            shutil.copy2(whole_result["output_image"], whole_output_path)
+            self.assertTrue(whole_output_path.exists(), tool_name)
+            self.assertGreater(mean_abs_diff(str(FIXTURE_IMAGE_PATH), str(whole_output_path)), 0.03, tool_name)
+            meta["whole_output"] = str(whole_output_path)
 
         if spec.supports_mask:
             mask_name = real_mask_name_for_tool(tool_name)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 MaskPolicy = Literal["none", "optional", "required"]
@@ -25,17 +25,31 @@ class ToolSpec(BaseModel):
     label: str
     description: str
     family: str
-    stage_affinity: list[str] = Field(default_factory=list)
+    focus_affinity: list[str] = Field(default_factory=list)
     supports_mask: bool = False
     requires_mask: bool = False
     supports_whole_image: bool = True
     recommended_mask_prompt: str | None = None
+    recommended_mask_prompts: list[str] = Field(default_factory=list)
+    selection_guidance: str = ""
+    conflict_tools: list[str] = Field(default_factory=list)
     default_params: dict[str, Any] = Field(default_factory=dict)
     planner_schema: dict[str, Any] = Field(default_factory=dict)
     primary_param: str = "strength"
     risk_level: RiskLevel = "low"
     status_label: str = ""
     keywords: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _prefer_model_facing_tool_description(self) -> "ToolSpec":
+        """Keep catalog descriptions aligned with the @tool docstring."""
+
+        schema_description = self.planner_schema.get("description") if isinstance(self.planner_schema, dict) else None
+        if isinstance(schema_description, str) and schema_description.strip():
+            self.description = schema_description.strip()
+        if self.recommended_mask_prompt and self.recommended_mask_prompt not in self.recommended_mask_prompts:
+            self.recommended_mask_prompts.insert(0, self.recommended_mask_prompt)
+        return self
 
 
 class ToolExecutionResult(BaseModel):

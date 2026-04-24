@@ -77,7 +77,7 @@ export async function uploadAssets(files: File[]): Promise<UploadAssetsResponse>
   return (await response.json()) as UploadAssetsResponse
 }
 
-export function listPackages(): Promise<ToolCatalogResponse> {
+export function listTools(): Promise<ToolCatalogResponse> {
   return requestJson<ToolCatalogResponse>('/meta/tools')
 }
 
@@ -104,6 +104,42 @@ export function resumeReview(payload: ResumeReviewRequest): Promise<ResumeReview
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export async function streamJobEvents(
+  jobId: string,
+  onEvent: (eventName: string, data: SseEventPayload) => void,
+): Promise<void> {
+  const response = await fetch(`${apiBaseUrl}/jobs/${jobId}/events/stream`)
+
+  if (!response.ok || !response.body) {
+    throw await buildHttpError(response)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() || ''
+
+    for (const block of blocks) {
+      const lines = block.split('\n')
+      const eventLine = lines.find((line) => line.startsWith('event:'))
+      const dataLine = lines.find((line) => line.startsWith('data:'))
+      if (!eventLine || !dataLine) continue
+
+      const eventName = eventLine.replace(/^event:\s*/, '').trim()
+      const payloadText = dataLine.replace(/^data:\s*/, '').trim()
+      const data = JSON.parse(payloadText) as SseEventPayload
+      onEvent(eventName, data)
+    }
+  }
 }
 
 export function generateToolLabMask(payload: ToolLabMaskRequest): Promise<ToolLabMaskResponse> {

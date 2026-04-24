@@ -15,13 +15,19 @@ const displayEvents = computed(() => {
       'bootstrap_started',
       'bootstrap_finished',
       'bootstrap_failed',
-      'stage_started',
-      'stage_execution_started',
-      'stage_execution_completed',
-      'stage_completed',
+      'round_started',
+      'candidate_generated',
+      'candidate_preview_started',
+      'candidate_preview_finished',
+      'candidate_selected',
+      'round_review_finished',
+      'recovery_started',
+      'round_completed',
       'node_started',
       'planner_started',
       'planner_finished',
+      'region_planning_finished',
+      'region_mask_started',
       'planner_tool_called',
       'planner_tool_resolved',
       'planner_tool_finished',
@@ -31,10 +37,10 @@ const displayEvents = computed(() => {
       'segmentation_finished',
       'segmentation_skipped',
       'segmentation_failed',
-      'package_started',
-      'package_finished',
-      'package_skipped',
-      'package_failed',
+      'tool_started',
+      'tool_finished',
+      'tool_skipped',
+      'tool_failed',
       'node_failed',
       'interrupt',
       'job_failed',
@@ -46,6 +52,22 @@ const currentEvent = computed(() => {
   if (displayEvents.value.length === 0) return null
   return displayEvents.value[displayEvents.value.length - 1]
 })
+
+const currentPayloadSummary = computed(() => {
+  const payload = currentEvent.value?.payload
+  if (!payload || typeof payload !== 'object') return ''
+  const record = payload as Record<string, unknown>
+  if (Array.isArray(record.candidates)) {
+    return `候选方案：${record.candidates.length} 个`
+  }
+  if (Array.isArray(record.steps)) {
+    return `候选步骤：${record.steps.length} 个`
+  }
+  if (typeof record.num_steps === 'number') {
+    return `候选步骤：${record.num_steps} 个`
+  }
+  return ''
+})
 </script>
 
 <template>
@@ -55,11 +77,12 @@ const currentEvent = computed(() => {
         <div class="orb-content" v-if="currentEvent">
           <transition name="fade-slide" mode="out-in">
             <div :key="currentEvent.message" class="text-wrapper">
-              <div class="meta" v-if="currentEvent.round || currentEvent.stage || currentEvent.op">
-                <span class="stage-badge" v-if="currentEvent.round">{{ currentEvent.round }}</span>
-                <span class="stage-badge" v-if="currentEvent.stage">{{ currentEvent.stage }}</span>
+              <div class="meta" v-if="currentEvent.round || currentEvent.focus || currentEvent.node || currentEvent.op">
+                <span class="meta-badge" v-if="currentEvent.round">{{ currentEvent.round }}</span>
+                <span class="meta-badge" v-if="currentEvent.focus">{{ currentEvent.focus }}</span>
+                <span class="meta-badge" v-if="currentEvent.node">{{ currentEvent.node }}</span>
                 <span class="op-name" v-if="currentEvent.op">{{ currentEvent.op }}</span>
-                <span class="stage-badge" v-if="typeof currentEvent.provider === 'string'">{{ currentEvent.provider }}</span>
+                <span class="meta-badge" v-if="typeof currentEvent.provider === 'string'">{{ currentEvent.provider }}</span>
               </div>
               <p class="message">{{ currentEvent.message }}</p>
               <p v-if="typeof currentEvent.prompt === 'string'" class="prompt-line">
@@ -67,6 +90,9 @@ const currentEvent = computed(() => {
               </p>
               <p v-if="typeof currentEvent.negative_prompt === 'string'" class="prompt-line muted">
                 排除区域：{{ currentEvent.negative_prompt }}
+              </p>
+              <p v-if="currentPayloadSummary" class="prompt-line">
+                {{ currentPayloadSummary }}
               </p>
               <pre v-if="currentEvent.error" class="error-log">{{ currentEvent.error }}</pre>
             </div>
@@ -149,7 +175,7 @@ const currentEvent = computed(() => {
   flex-wrap: wrap;
 }
 
-.stage-badge {
+.meta-badge {
   font-size: 0.75rem;
   padding: 4px 12px;
   border-radius: 20px;

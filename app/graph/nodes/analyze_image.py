@@ -27,6 +27,7 @@ def _compute_basic_image_analysis(image_path: str) -> dict[str, Any]:
 
     image = Image.open(image_path).convert("RGB")
     image_np = np.asarray(image, dtype=np.float32)
+    rgb01 = image_np / 255.0
     gray = np.dot(image_np[..., :3], [0.299, 0.587, 0.114])
 
     height, width = gray.shape
@@ -34,6 +35,51 @@ def _compute_basic_image_analysis(image_path: str) -> dict[str, Any]:
     brightness_std = float(gray.std())
     shadow_ratio = float((gray < 28).mean())
     highlight_ratio = float((gray > 235).mean())
+    midtone_ratio = float(((gray >= 56) & (gray <= 205)).mean())
+    dynamic_range = float(np.percentile(gray, 95) - np.percentile(gray, 5))
+
+    # 亮度直方图只保留归一化比例，避免把大数组塞进 state。
+    histogram, _ = np.histogram(gray, bins=12, range=(0, 255))
+    histogram_total = max(int(histogram.sum()), 1)
+    exposure_histogram = [round(float(value) / histogram_total, 4) for value in histogram]
+
+    # 轻量 HSV 饱和度估计，不依赖 OpenCV，保证分析节点稳定可跑。
+    rgb_max = rgb01.max(axis=2)
+    rgb_min = rgb01.min(axis=2)
+    chroma = rgb_max - rgb_min
+    saturation = np.divide(chroma, np.maximum(rgb_max, 1e-6), out=np.zeros_like(chroma), where=rgb_max > 1e-6)
+    saturation_mean = float(saturation.mean())
+    saturation_std = float(saturation.std())
+
+    # 局部对比用相邻像素梯度近似，足够支撑“平/糊/低反差”的基础判断。
+    grad_x = np.abs(np.diff(gray, axis=1))
+    grad_y = np.abs(np.diff(gray, axis=0))
+    local_contrast_mean = float((grad_x.mean() + grad_y.mean()) / 2.0)
+
+    channel_means = image_np.mean(axis=(0, 1))
+    neutral_mean = float(channel_means.mean())
+    color_cast_rgb = {
+        "red": round(float(channel_means[0] - neutral_mean), 4),
+        "green": round(float(channel_means[1] - neutral_mean), 4),
+        "blue": round(float(channel_means[2] - neutral_mean), 4),
+    }
+
+    # 没有分割时，用中心区域/边缘区域给主体和背景亮度一个保守代理值。
+    center_y0, center_y1 = int(height * 0.25), int(height * 0.75)
+    center_x0, center_x1 = int(width * 0.25), int(width * 0.75)
+    center_gray = gray[center_y0:center_y1, center_x0:center_x1]
+    border_mask = np.ones_like(gray, dtype=bool)
+    border_margin_y = max(int(height * 0.12), 1)
+    border_margin_x = max(int(width * 0.12), 1)
+    border_mask[border_margin_y : height - border_margin_y, border_margin_x : width - border_margin_x] = False
+    background_gray = gray[border_mask]
+
+    # 简单肤色代理只作为分析提示，不作为最终人像判断依据。
+    r = rgb01[..., 0]
+    g = rgb01[..., 1]
+    b = rgb01[..., 2]
+    skin_mask = (r > 0.32) & (g > 0.22) & (b > 0.16) & (r > b * 1.05) & (r < 0.98) & (saturation > 0.08)
+    skin_luminance_mean = float(gray[skin_mask].mean()) if bool(skin_mask.any()) else None
 
     issues: list[str] = []
     if brightness_mean < 95:
@@ -47,6 +93,12 @@ def _compute_basic_image_analysis(image_path: str) -> dict[str, Any]:
         issues.append("crushed_shadows")
     if highlight_ratio > 0.08:
         issues.append("clipped_highlights")
+    if saturation_mean < 0.08:
+        issues.append("low_saturation")
+    if local_contrast_mean < 5.5:
+        issues.append("low_local_contrast")
+    if dynamic_range < 95:
+        issues.append("compressed_tonal_range")
 
     summary = "画面整体正常。"
     if issues:
@@ -74,6 +126,16 @@ def _compute_basic_image_analysis(image_path: str) -> dict[str, Any]:
             "brightness_std": brightness_std,
             "shadow_ratio": shadow_ratio,
             "highlight_ratio": highlight_ratio,
+            "midtone_ratio": midtone_ratio,
+            "saturation_mean": saturation_mean,
+            "saturation_std": saturation_std,
+            "local_contrast_mean": local_contrast_mean,
+            "dynamic_range": dynamic_range,
+            "color_cast_rgb": color_cast_rgb,
+            "exposure_histogram": exposure_histogram,
+            "subject_luminance_mean": float(center_gray.mean()) if center_gray.size else None,
+            "background_luminance_mean": float(background_gray.mean()) if background_gray.size else None,
+            "skin_luminance_mean": skin_luminance_mean,
         },
     }
 
@@ -136,7 +198,8 @@ def analyze_image(state: EditState) -> dict:
         except RuntimeError as error:
             fallback_trace = append_fallback_trace(
                 state.get("fallback_trace"),
-                stage="analyze_image",
+                round_id=None,
+                focus=None,
                 source="analyze_image_model",
                 location="image_analysis",
                 strategy="basic_image_analysis",
@@ -151,7 +214,8 @@ def analyze_image(state: EditState) -> dict:
     else:
         fallback_trace = append_fallback_trace(
             state.get("fallback_trace"),
-            stage="analyze_image",
+            round_id=None,
+            focus=None,
             source="analyze_image_model",
             location="image_analysis",
             strategy="basic_image_analysis",

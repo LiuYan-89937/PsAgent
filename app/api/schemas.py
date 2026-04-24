@@ -13,10 +13,14 @@ from app.graph.state import (
     EvaluationReport,
     FallbackTraceItem,
     FeedbackItem,
+    FocusKey,
     JobEvent,
-    PlannerExecutionPlan,
+    ObjectiveCard,
+    RecoveryDecision,
+    RoundReview,
+    SearchCandidateArtifact,
+    SearchRoundArtifact,
     SegmentationTraceItem,
-    StageSummary,
 )
 
 
@@ -41,13 +45,7 @@ class UploadAssetsResponse(BaseModel):
 
 
 class EditRequest(BaseModel):
-    """Edit entry request.
-
-    前端可以先走两种输入模式：
-    1. `input_asset_ids`
-    2. `input_image_paths`
-    当前优先推荐前端使用上传后的 `asset_id`。
-    """
+    """Edit entry request."""
 
     user_id: str
     thread_id: str | None = None
@@ -69,16 +67,18 @@ class JobSummaryResponse(BaseModel):
     updated_at: datetime
     approval_required: bool = False
     request_text: str | None = None
-    current_stage: str | None = None
+    current_round: str | None = None
+    current_focus: FocusKey | None = None
     current_message: str | None = None
     error: str | None = None
     error_detail: ErrorDetail | None = None
 
 
-class StageTimingResponse(BaseModel):
-    """Frontend-facing stage timing summary."""
+class RoundTimingResponse(BaseModel):
+    """Frontend-facing round timing summary."""
 
-    stage: str
+    round: str
+    focus: FocusKey | None = None
     label: str
     started_at: datetime
     ended_at: datetime
@@ -93,7 +93,9 @@ class ExecutionTraceResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     index: int | None = None
-    stage: str | None = None
+    round_id: str | None = None
+    focus: FocusKey | None = None
+    candidate_id: str | None = None
     op: str | None = None
     region: str | None = None
     ok: bool
@@ -108,19 +110,49 @@ class ExecutionTraceResponse(BaseModel):
     artifacts: dict[str, Any] = Field(default_factory=dict)
 
 
-class PhaseResponse(BaseModel):
-    """Frontend-facing grouped phase payload."""
+class CandidateExecutionResponse(BaseModel):
+    """Frontend-facing execution result for one candidate."""
 
-    plan: PlannerExecutionPlan | None = None
+    input_image_path: str | None = None
+    output_image_path: str | None = None
+    output_asset_id: str | None = None
+    output_asset: AssetResponse | None = None
     execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
-    segmentation_trace: list[SegmentationTraceItem] = Field(default_factory=list)
-    eval_report: EvaluationReport | None = None
-    output: AssetResponse | None = None
-    summary: StageSummary | None = None
-    skipped: bool = False
-    skip_reason: str | None = None
-    trigger_reasons: list[str] = Field(default_factory=list)
-    stopped_early: bool = False
+    segmentation_trace: list[dict[str, Any]] = Field(default_factory=list)
+    fallback_trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SearchCandidateResponse(BaseModel):
+    """Frontend-facing candidate search artifact."""
+
+    candidate_id: str
+    label: str = ""
+    focus: FocusKey
+    selected: bool = False
+    eliminated_reason: str | None = None
+    program: dict[str, Any] | None = None
+    preview_execution: CandidateExecutionResponse | None = None
+    review: dict[str, Any] | None = None
+
+
+class SearchRoundResponse(BaseModel):
+    """Frontend-facing round artifact."""
+
+    id: str
+    index: int
+    focus: FocusKey
+    input_image_path: str | None = None
+    output_image_path: str | None = None
+    output_asset_id: str | None = None
+    output_asset: AssetResponse | None = None
+    objective_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    candidates: list[SearchCandidateResponse] = Field(default_factory=list)
+    selected_candidate_id: str | None = None
+    selected_full_execution: CandidateExecutionResponse | None = None
+    round_review: RoundReview | None = None
+    recovery_decision: RecoveryDecision | None = None
+    recovery_candidates: list[SearchCandidateResponse] = Field(default_factory=list)
+    completed: bool = False
 
 
 class EditResponse(BaseModel):
@@ -132,11 +164,15 @@ class EditResponse(BaseModel):
     edit_plan: EditPlan | None = None
     eval_report: EvaluationReport | None = None
     execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
-    segmentation_trace: list[SegmentationTraceItem] = Field(default_factory=list)
-    fallback_trace: list[FallbackTraceItem] = Field(default_factory=list)
-    phases: dict[str, PhaseResponse] = Field(default_factory=dict)
+    segmentation_trace: list[dict[str, Any]] = Field(default_factory=list)
+    fallback_trace: list[dict[str, Any]] = Field(default_factory=list)
+    objective_card: ObjectiveCard | None = None
+    rounds: list[SearchRoundResponse] = Field(default_factory=list)
+    selected_candidate_id: str | None = None
+    final_review: EvaluationReport | None = None
+    final_execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
     events: list[JobEvent] = Field(default_factory=list)
-    stage_timings: list[StageTimingResponse] = Field(default_factory=list)
+    round_timings: list[RoundTimingResponse] = Field(default_factory=list)
 
 
 class JobDetailResponse(BaseModel):
@@ -149,11 +185,15 @@ class JobDetailResponse(BaseModel):
     edit_plan: EditPlan | None = None
     eval_report: EvaluationReport | None = None
     execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
-    segmentation_trace: list[SegmentationTraceItem] = Field(default_factory=list)
-    fallback_trace: list[FallbackTraceItem] = Field(default_factory=list)
-    phases: dict[str, PhaseResponse] = Field(default_factory=dict)
+    segmentation_trace: list[dict[str, Any]] = Field(default_factory=list)
+    fallback_trace: list[dict[str, Any]] = Field(default_factory=list)
+    objective_card: ObjectiveCard | None = None
+    rounds: list[SearchRoundResponse] = Field(default_factory=list)
+    selected_candidate_id: str | None = None
+    final_review: EvaluationReport | None = None
+    final_execution_trace: list[ExecutionTraceResponse] = Field(default_factory=list)
     events: list[JobEvent] = Field(default_factory=list)
-    stage_timings: list[StageTimingResponse] = Field(default_factory=list)
+    round_timings: list[RoundTimingResponse] = Field(default_factory=list)
     feedback: list[FeedbackItem] = Field(default_factory=list)
 
 
@@ -184,11 +224,7 @@ class ResumeReviewRequest(BaseModel):
 
 
 class ResumeReviewResponse(BaseModel):
-    """Resume-review response.
-
-    当前只是把接口契约和状态承载先定下来，真正的 interrupt/resume
-    还要等审核链路正式接入。
-    """
+    """Resume-review response."""
 
     job_id: str
     accepted: bool
@@ -204,11 +240,14 @@ class ToolCatalogItemResponse(BaseModel):
     label: str | None = None
     description: str
     family: str | None = None
-    stage_affinity: list[str] = Field(default_factory=list)
+    focus_affinity: list[str] = Field(default_factory=list)
     supports_mask: bool | None = None
     requires_mask: bool | None = None
     supports_whole_image: bool | None = None
     recommended_mask_prompt: str | None = None
+    recommended_mask_prompts: list[str] = Field(default_factory=list)
+    selection_guidance: str = ""
+    conflict_tools: list[str] = Field(default_factory=list)
     default_params: dict[str, Any] = Field(default_factory=dict)
     planner_schema: dict[str, Any] = Field(default_factory=dict)
     primary_param: str | None = None
@@ -289,7 +328,6 @@ class ToolLabRunResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Service health payload."""
+    """Health response."""
 
     ok: bool = True
-    service: str = "PsAgent"

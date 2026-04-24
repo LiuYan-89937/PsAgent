@@ -17,9 +17,19 @@
 返回结构：
 {
   "mode": "explicit|auto",
-  "requested_packages": [
+  "goals": [
     {
-      "op": "package_name",
+      "kind": "目标类型，例如 lift_luminance/recover_highlights/natural_skin_tone/balance_color/improve_detail/auto_enhance",
+      "target_region": "whole_image|动态区域标签",
+      "priority": 0,
+      "intensity": 0.0,
+      "constraints": [],
+      "source": "model"
+    }
+  ],
+  "requested_tools": [
+    {
+      "op": "tool_name",
       "region": "whole_image|动态区域标签",
       "strength": 0.0,
       "params": {},
@@ -34,14 +44,18 @@
 }
 
 整理原则：
-1. `op` 必须来自 `工具目录`。
-2. 只保留高层意图，不要在这里展开完整多轮策略。
-3. 全图请求时，`region` 写 `whole_image`；局部请求时，`region` 写简洁、可读的动态区域标签。
-4. 用户没有明确修图动作时，`mode` 设为 `auto`；有明确修图动作时，`mode` 设为 `explicit`。
-5. 高层偏好、限制条件和结果倾向，更适合写进 `constraints`。
-6. 如果用户明显想要更强的效果，不要把意图弱化成过于保守的请求。
-7. 不要在这里发明复杂参数，只做稳定归一化。
-8. `goal_summary` 要简短概括最终想达到的效果。
-9. `wants_repair` 表示用户更偏修复问题；`wants_style` 表示用户更偏氛围和风格；两者可以同时为 true。
-10. `requires_local_editing` 只在明显需要局部处理时设为 true。
-11. 只返回 JSON。
+1. `goals` 是主要输出，描述用户想达到的修图目标，不要过早绑定到某个具体工具。
+2. `requested_tools` 只在用户明确点名工具函数名或明确说“用某某工具”时填写；普通“提亮/压高光/肤色自然”应写进 `goals`，不要硬映射成工具。
+3. `op` 必须来自 `工具目录`。
+4. 只保留高层意图，不要在这里展开完整多轮策略。
+5. 全图请求时，`target_region`/`region` 写 `whole_image`；局部请求时，写简洁、可读的动态区域标签。
+6. 用户没有明确修图动作时，`mode` 设为 `auto`；有明确修图动作时，`mode` 设为 `explicit`。
+7. 高层偏好、限制条件和结果倾向，更适合写进 `constraints`。
+   - 智能美化常见约束应优先保留原图光线、影调、黑位、主体身份和自然肤色。
+   - “保留氛围/保留影调/自然美化”不是风格化需求，不要因此把 `wants_style` 设为 true。
+8. 如果用户明显想要更强的效果，不要把意图弱化成过于保守的请求。
+9. 不要在这里发明复杂参数，只做稳定归一化。
+10. `goal_summary` 要简短概括最终想达到的效果。
+11. `wants_repair` 表示用户更偏修复问题；`wants_style` 只在明确要求胶片、梦幻、柔光、复古、电影感、强色调或同款风格时为 true；两者可以同时为 true。
+12. `requires_local_editing` 只在明显需要局部处理时设为 true。
+13. 只返回 JSON。

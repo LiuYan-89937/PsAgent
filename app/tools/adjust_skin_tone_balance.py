@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_point_color_adjustment
 
 
@@ -24,6 +24,7 @@ def adjust_skin_tone_balance(
 ) -> dict:
     """Use this tool when skin tone specifically needs a more balanced hue, saturation, or luminance without changing the rest of the image. It is a skin-focused color correction tool and should be used with a skin mask rather than as a global color adjustment."""
 
+    require_mask_path("adjust_skin_tone_balance", mask_path, recommended_prompt="skin")
     output_path = temp_output_path("psagent_skin_tone_balance_")
     preserve_neutrals = 0.15 + protection * 0.65
     range_width = 18.0 + softness * 24.0
@@ -61,7 +62,7 @@ ADJUST_SKIN_TONE_BALANCE_SPEC = ToolSpec(
     label="肤色校正",
     description="Fine-tune skin hue, saturation, and luminance in a protected skin band.",
     family="color",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

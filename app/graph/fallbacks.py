@@ -10,7 +10,9 @@ from app.graph.state import FallbackTraceItem
 def append_fallback_trace(
     existing: list[dict[str, Any]] | None,
     *,
-    stage: str,
+    round_id: str | None = None,
+    focus: str | None = None,
+    candidate_id: str | None = None,
     source: str,
     location: str,
     strategy: str,
@@ -23,7 +25,9 @@ def append_fallback_trace(
     items.append(
         FallbackTraceItem(
             index=len(items),
-            stage=stage,
+            round_id=round_id,
+            focus=focus,
+            candidate_id=candidate_id,
             source=source,
             location=location,
             strategy=strategy,

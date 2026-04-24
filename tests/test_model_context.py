@@ -36,6 +36,7 @@ class ModelContextTest(unittest.TestCase):
 
         exposure = next(item for item in compact_catalog if item["name"] == "adjust_exposure")
         strength = next(item for item in exposure["params"] if item["name"] == "strength")
+        teeth = next(item for item in compact_catalog if item["name"] == "adjust_teeth_whiten")
 
         self.assertEqual(exposure["execution_modes"], ["whole_image", "masked_region"])
         self.assertEqual(strength["type"], "integer")
@@ -43,6 +44,8 @@ class ModelContextTest(unittest.TestCase):
         self.assertEqual(strength["minimum"], 0)
         self.assertEqual(strength["maximum"], 100)
         self.assertIn("仅填 0-100 整数", strength["description"])
+        self.assertTrue(teeth["requires_mask"])
+        self.assertEqual(teeth["recommended_mask_prompt"], "teeth")
 
     def test_parse_request_compact_catalog_omits_param_details(self) -> None:
         full_catalog = export_tool_catalog()
@@ -78,7 +81,7 @@ class ModelContextTest(unittest.TestCase):
         compact_intent = compact_request_intent_for_model(
             {
                 "mode": "explicit",
-                "requested_packages": [
+                "requested_tools": [
                     {"op": "adjust_exposure", "region": "逆光脸部区域", "strength": 0.2, "params": {}}
                 ],
                 "constraints": ["repair_backlighting"],

@@ -5,8 +5,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 from app.graph.nodes.parse_request import parse_request
-from app.graph.state import RequestIntent
+from app.graph.state import RequestGoal, RequestIntent
 from app.services.parse_request_model import generate_request_intent_with_qwen
 
 
@@ -23,7 +25,10 @@ class ParseRequestNodeTest(unittest.TestCase):
             result = parse_request(state)
 
         self.assertEqual(result["mode"], "explicit")
-        self.assertTrue(result["request_intent"]["requested_packages"])
+        self.assertFalse(result["request_intent"]["requested_tools"])
+        goals = {item["kind"] for item in result["request_intent"]["goals"]}
+        self.assertIn("lift_luminance", goals)
+        self.assertIn("background_balance", goals)
 
     def test_parse_request_uses_model_when_available(self) -> None:
         state = {
@@ -47,7 +52,7 @@ class ParseRequestNodeTest(unittest.TestCase):
                 "app.graph.nodes.parse_request.generate_request_intent_with_qwen",
                 return_value=RequestIntent(
                     mode="auto",
-                    requested_packages=[],
+                    requested_tools=[],
                     constraints=["avoid_overediting"],
                 ),
             ),
@@ -56,6 +61,73 @@ class ParseRequestNodeTest(unittest.TestCase):
 
         self.assertEqual(result["mode"], "auto")
         self.assertEqual(result["request_intent"]["constraints"], ["avoid_overediting"])
+
+    def test_parse_request_stabilizes_model_style_false_positive(self) -> None:
+        state = {
+            "request_text": "保留原图逆光氛围和暗背景，自然美化",
+            "tool_catalog": [],
+        }
+
+        with (
+            patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=True),
+            patch(
+                "app.graph.nodes.parse_request.generate_request_intent_with_qwen",
+                return_value=RequestIntent(
+                    mode="auto",
+                    requested_tools=[],
+                    constraints=[],
+                    wants_style=True,
+                ),
+            ),
+        ):
+            result = parse_request(state)
+
+        self.assertFalse(result["request_intent"]["wants_style"])
+        self.assertIn("preserve_original_mood", result["request_intent"]["constraints"])
+
+    def test_request_goal_accepts_user_source_alias(self) -> None:
+        goal = RequestGoal.model_validate(
+            {
+                "kind": "lift_luminance",
+                "target_region": "whole_image",
+                "priority": 80,
+                "source": "user",
+            }
+        )
+
+        self.assertEqual(goal.source, "model")
+
+    def test_parse_request_falls_back_when_model_payload_validation_fails(self) -> None:
+        state = {
+            "request_text": "提亮主体并保留逆光氛围",
+            "tool_catalog": [],
+            "fallback_trace": [],
+        }
+
+        with (
+            patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=True),
+            patch(
+                "app.graph.nodes.parse_request.generate_request_intent_with_qwen",
+                side_effect=ValidationError.from_exception_data(
+                    "RequestIntent",
+                    [
+                        {
+                            "type": "literal_error",
+                            "loc": ("goals", 0, "source"),
+                            "msg": "Input should be 'heuristic', 'model' or 'explicit_tool'",
+                            "input": "user",
+                            "ctx": {"expected": "'heuristic', 'model' or 'explicit_tool'"},
+                        }
+                    ],
+                ),
+            ),
+        ):
+            result = parse_request(state)
+
+        self.assertEqual(result["mode"], "explicit")
+        self.assertTrue(result["request_intent"]["goals"])
+        self.assertTrue(result["fallback_trace"])
+        self.assertEqual(result["fallback_trace"][-1]["strategy"], "heuristic_request_intent")
 
     def test_parse_request_marks_layered_repair_and_style_constraints(self) -> None:
         state = {
@@ -67,18 +139,32 @@ class ParseRequestNodeTest(unittest.TestCase):
             result = parse_request(state)
 
         constraints = set(result["request_intent"]["constraints"])
-        requested_ops = {item["op"] for item in result["request_intent"]["requested_packages"]}
+        goal_kinds = {item["kind"] for item in result["request_intent"]["goals"]}
         self.assertIn("repair_backlighting", constraints)
         self.assertIn("needs_layered_refinement", constraints)
         self.assertTrue(result["request_intent"]["wants_style"])
-        self.assertIn("adjust_exposure", requested_ops)
+        self.assertIn("lift_luminance", goal_kinds)
+
+    def test_parse_request_does_not_treat_preserved_mood_as_style(self) -> None:
+        state = {
+            "request_text": "保留原图逆光氛围和暗背景，自然美化，不要过度",
+            "tool_catalog": [],
+        }
+
+        with patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=False):
+            result = parse_request(state)
+
+        constraints = set(result["request_intent"]["constraints"])
+        self.assertIn("preserve_original_mood", constraints)
+        self.assertIn("avoid_overediting", constraints)
+        self.assertFalse(result["request_intent"]["wants_style"])
 
     def test_parse_request_model_uses_compact_tool_catalog(self) -> None:
         with patch(
             "app.services.parse_request_model.call_qwen_for_json",
             return_value={
                 "mode": "explicit",
-                "requested_packages": [],
+                "requested_tools": [],
                 "constraints": [],
             },
         ) as mocked_call:

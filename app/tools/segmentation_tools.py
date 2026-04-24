@@ -2,7 +2,7 @@
 
 当前项目默认仍保留阿里云主体分割链路，确保原有 `person/main_subject/background`
 不会回退。与此同时新增 fal 的文本引导分割，便于后续做更细的语义
-区域选择，例如 face / hair / dress / water splash 等。
+区域选择，例如 face / hair / background 等。
 """
 
 from __future__ import annotations
@@ -51,6 +51,19 @@ PSAGENT_SEGMENTATION_FALLBACK_PROVIDER_ENV = "PSAGENT_SEGMENTATION_FALLBACK_PROV
 
 SegmentationProvider = Literal["auto", "aliyun", "fal_sam3"]
 
+ABSTRACT_SEGMENTATION_PROMPTS = frozenset(
+    {
+        "background",
+        "subject",
+        "main visual subject",
+        "main subject",
+        "detail",
+        "object",
+        "clutter",
+        "body",
+    }
+)
+
 
 class SegmentationProviderError(RuntimeError):
     """Raised when a segmentation provider cannot satisfy the request."""
@@ -97,6 +110,20 @@ class SegmentationResult:
     effective_prompt: str | None = None
     revert_mask: bool | None = None
     attempts: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(slots=True)
+class SegmentationRequestPlan:
+    """Concrete provider request derived from a semantic mask request."""
+
+    region: str
+    prompt: str | None
+    provider: str | None
+    revert_mask: bool | str | None
+    requested_prompt: str | None
+    effective_prompt: str | None
+    strategy: str
+    fallback_used: bool = False
 
 
 AliyunSegmentationResult = SegmentationResult
@@ -487,19 +514,109 @@ def _default_fal_prompt_for_region(region: str) -> str:
     if region == "person":
         return "person"
     if region == "main_subject":
-        return "main visual subject"
+        return "subject"
     if region == "background":
         return "background"
     return region
 
 
+def _is_concrete_visible_prompt(prompt: str | None) -> bool:
+    """Return whether a prompt names a visible, concrete thing in the image."""
+
+    if not isinstance(prompt, str):
+        return False
+    cleaned = " ".join(prompt.strip().lower().split())
+    if not cleaned:
+        return False
+    if cleaned in ABSTRACT_SEGMENTATION_PROMPTS:
+        return False
+    if any(fragment in cleaned for fragment in (" area", " region", " thing", " stuff")):
+        return False
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9 -]{0,39}", cleaned))
+
+
+def _resolve_concrete_segmentation_request(
+    *,
+    region: str,
+    provider: str | None,
+    prompt: str | None,
+    revert_mask: bool | str | None,
+) -> SegmentationRequestPlan:
+    """Convert semantic labels into a concrete provider request for segmentation."""
+
+    normalized_prompt = _normalize_fal_prompt_label(prompt or "", region=region) if prompt else None
+    normalized_region = " ".join(region.strip().lower().replace("_", " ").split())
+    direct_prompt = normalized_prompt or None
+
+    if normalized_prompt == "background":
+        if provider == "aliyun":
+            return SegmentationRequestPlan(
+                region="background",
+                prompt=None,
+                provider="aliyun",
+                revert_mask=False,
+                requested_prompt=normalized_prompt,
+                effective_prompt=None,
+                strategy="aliyun_background_region",
+                fallback_used=True,
+            )
+        return SegmentationRequestPlan(
+            region="background",
+            prompt="person",
+            provider="fal_sam3" if provider in {"fal_sam3", "auto"} else provider,
+            revert_mask=True,
+            requested_prompt=normalized_prompt,
+            effective_prompt="person",
+            strategy="invert_person_for_background",
+            fallback_used=True,
+        )
+
+    if normalized_prompt == "subject" or (not prompt and normalized_region in {"main subject", "main_subject"}):
+        return SegmentationRequestPlan(
+            region="main_subject",
+            prompt=None,
+            provider="aliyun",
+            revert_mask=False,
+            requested_prompt=normalized_prompt or "subject",
+            effective_prompt=None,
+            strategy="aliyun_main_subject_region",
+            fallback_used=True,
+        )
+
+    if direct_prompt and not _is_concrete_visible_prompt(direct_prompt):
+        raise SegmentationProviderError(
+            f"Segmentation prompt must be a visible concrete noun, got abstract label: {direct_prompt}"
+        )
+
+    if not prompt and normalized_region == "background" and provider == "fal_sam3":
+        return SegmentationRequestPlan(
+            region="background",
+            prompt="person",
+            provider="fal_sam3",
+            revert_mask=True,
+            requested_prompt=None,
+            effective_prompt="person",
+            strategy="invert_person_for_background",
+            fallback_used=True,
+        )
+
+    return SegmentationRequestPlan(
+        region=region,
+        prompt=direct_prompt,
+        provider=provider,
+        revert_mask=revert_mask,
+        requested_prompt=normalized_prompt,
+        effective_prompt=direct_prompt,
+        strategy="direct_prompt" if direct_prompt else "coarse_region",
+        fallback_used=False,
+    )
+
+
 def _is_background_retry_candidate(region: str, prompt: str | None) -> bool:
     """Return whether the request looks like a semantic background selection."""
 
-    if region == "background":
-        return True
     normalized_prompt = _normalize_fal_prompt_label(prompt or "", region=region)
-    return normalized_prompt in {"background", "trees", "haze"}
+    return normalized_prompt == "background"
 
 
 def _background_retry_attempts(region: str, prompt: str | None) -> list[dict[str, Any]]:
@@ -509,23 +626,9 @@ def _background_retry_attempts(region: str, prompt: str | None) -> list[dict[str
     return [
         {
             "attempt_index": 0,
-            "attempt_strategy": "direct_background_prompt",
-            "requested_prompt": direct_prompt,
-            "effective_prompt": direct_prompt,
-            "revert_mask": False,
-        },
-        {
-            "attempt_index": 1,
             "attempt_strategy": "invert_person",
             "requested_prompt": direct_prompt,
             "effective_prompt": "person",
-            "revert_mask": True,
-        },
-        {
-            "attempt_index": 2,
-            "attempt_strategy": "invert_subject",
-            "requested_prompt": direct_prompt,
-            "effective_prompt": "subject",
             "revert_mask": True,
         },
     ]
@@ -548,14 +651,12 @@ def _normalize_fal_prompt_label(prompt: str, *, region: str) -> str:
         return "teeth"
     if any(keyword in cleaned for keyword in ("eyes", "eye", "虹膜", "眼睛")):
         return "eyes"
-    if any(keyword in cleaned for keyword in ("white dress", "wedding dress", "婚纱", "白裙")):
-        return "dress"
-    if any(keyword in cleaned for keyword in ("dress", "clothing", "clothes", "衣服", "服装")):
-        return "dress"
     if any(keyword in cleaned for keyword in ("upper body", "上半身", "half body", "person", "人物", "人像")):
         return "person"
     if any(keyword in cleaned for keyword in ("main subject", "主体")):
         return "subject"
+    if any(keyword in cleaned for keyword in ("dress", "gown", "skirt", "裙", "婚纱", "白裙", "连衣裙")):
+        return "dress"
     if any(keyword in cleaned for keyword in ("background foliage", "foliage", "greenery", "绿植", "树林", "草地", "树", "树叶", "草")):
         return "trees"
     if any(keyword in cleaned for keyword in ("background haze", "灰雾", "雾")):
@@ -564,8 +665,6 @@ def _normalize_fal_prompt_label(prompt: str, *, region: str) -> str:
         return "background"
     if any(keyword in cleaned for keyword in ("water spray", "droplet", "water", "spray", "泡泡", "水花")):
         return "water"
-    if any(keyword in cleaned for keyword in ("bottle", "瓶子")):
-        return "bottle"
     if any(keyword in cleaned for keyword in ("blemish", "痘", "瑕疵")):
         return "blemish"
     if any(keyword in cleaned for keyword in ("passersby", "路人")):
@@ -574,8 +673,10 @@ def _normalize_fal_prompt_label(prompt: str, *, region: str) -> str:
         return "object"
     if any(keyword in cleaned for keyword in ("detail", "细节")):
         return "subject"
-    if cleaned in {"person", "subject", "body"}:
+    if cleaned in {"person", "subject", "body", "background", "object", "dress"}:
         return cleaned
+    if not re.fullmatch(r"[a-z0-9][a-z0-9 -]{0,39}", cleaned):
+        return _default_fal_prompt_for_region(region)
     return cleaned
 
 
@@ -596,8 +697,6 @@ def _default_semantic_type_for_prompt(region: str, prompt: str) -> bool:
             "face",
             "hair",
             "skin",
-            "dress",
-            "clothes",
             "body",
             "hand",
             "arm",
@@ -630,6 +729,10 @@ def generate_fal_sam3_mask(
     cleaned_prompt = _normalize_fal_prompt_label(prompt, region="main_subject")
     if not cleaned_prompt:
         raise FalImageSegError("fal segmentation requires a non-empty prompt.")
+    if not _is_concrete_visible_prompt(cleaned_prompt):
+        raise FalImageSegError(
+            f"fal segmentation prompt must be a visible concrete noun, got abstract label: {cleaned_prompt}"
+        )
 
     if output_dir is None:
         prompt_fragment = _slugify_fragment(cleaned_prompt, fallback="mask")
@@ -891,39 +994,49 @@ def resolve_region_mask(
 ) -> SegmentationResult:
     """Resolve a supported region into a provider result with fallback metadata."""
 
-    active_provider = _resolve_segmentation_provider(region=region, provider=provider, prompt=prompt)
+    request_plan = _resolve_concrete_segmentation_request(
+        region=region,
+        provider=provider,
+        prompt=prompt,
+        revert_mask=revert_mask,
+    )
+    active_provider = _resolve_segmentation_provider(
+        region=request_plan.region,
+        provider=request_plan.provider,
+        prompt=request_plan.prompt,
+    )
 
     try:
         if active_provider == "fal_sam3":
             fal_result = (
                 _ensure_fal_region_mask_with_background_retries(
                     image_path,
-                    region,
+                    request_plan.region,
                     output_dir=output_dir,
-                    prompt=prompt,
+                    prompt=request_plan.prompt,
                     negative_prompt=negative_prompt,
                     semantic_type=semantic_type,
                     fill_holes=fill_holes,
                     expand_mask=expand_mask,
                     blur_mask=blur_mask,
                     use_grounding_dino=use_grounding_dino,
-                    revert_mask=revert_mask,
+                    revert_mask=request_plan.revert_mask,
                     start_timeout_seconds=start_timeout_seconds,
                     client_timeout_seconds=client_timeout_seconds,
                 )
-                if _is_background_retry_candidate(region, prompt)
+                if _is_background_retry_candidate(request_plan.region, request_plan.prompt)
                 else _ensure_fal_region_mask(
                     image_path,
-                    region,
+                    request_plan.region,
                     output_dir=output_dir,
-                    prompt=prompt,
+                    prompt=request_plan.prompt,
                     negative_prompt=negative_prompt,
                     semantic_type=semantic_type,
                     fill_holes=fill_holes,
                     expand_mask=expand_mask,
                     blur_mask=blur_mask,
                     use_grounding_dino=use_grounding_dino,
-                    revert_mask=revert_mask,
+                    revert_mask=request_plan.revert_mask,
                     start_timeout_seconds=start_timeout_seconds,
                     client_timeout_seconds=client_timeout_seconds,
                 )
@@ -931,21 +1044,29 @@ def resolve_region_mask(
             return replace(
                 fal_result,
                 requested_provider=active_provider,
-                fallback_used=fal_result.fallback_used,
+                fallback_used=fal_result.fallback_used or request_plan.fallback_used,
+                requested_prompt=request_plan.requested_prompt,
+                effective_prompt=fal_result.effective_prompt or request_plan.effective_prompt,
+                revert_mask=fal_result.revert_mask if fal_result.revert_mask is not None else request_plan.revert_mask,
+                attempt_strategy=fal_result.attempt_strategy or (request_plan.strategy if request_plan.fallback_used else None),
             )
         return replace(
             _ensure_aliyun_region_mask(
                 image_path,
-                region,
+                request_plan.region,
                 output_dir=output_dir,
                 poll_interval_seconds=poll_interval_seconds,
                 max_attempts=max_attempts,
             ),
             requested_provider=active_provider,
-            fallback_used=False,
+            fallback_used=request_plan.fallback_used,
+            requested_prompt=request_plan.requested_prompt,
+            effective_prompt=request_plan.effective_prompt,
+            revert_mask=request_plan.revert_mask if isinstance(request_plan.revert_mask, bool) else None,
+            attempt_strategy=request_plan.strategy if request_plan.fallback_used else None,
         )
     except SegmentationProviderError:
-        fallback_provider = _resolve_fallback_provider(active_provider=active_provider, prompt=prompt)
+        fallback_provider = _resolve_fallback_provider(active_provider=active_provider, prompt=request_plan.prompt)
         if fallback_provider is None:
             raise
 
@@ -953,32 +1074,40 @@ def resolve_region_mask(
             return replace(
                 _ensure_aliyun_region_mask(
                     image_path,
-                    region,
+                    request_plan.region,
                     output_dir=output_dir,
                     poll_interval_seconds=poll_interval_seconds,
                     max_attempts=max_attempts,
                 ),
                 requested_provider=active_provider,
                 fallback_used=True,
+                requested_prompt=request_plan.requested_prompt,
+                effective_prompt=request_plan.effective_prompt,
+                revert_mask=request_plan.revert_mask if isinstance(request_plan.revert_mask, bool) else None,
+                attempt_strategy=request_plan.strategy if request_plan.fallback_used else None,
             )
         return replace(
             _ensure_fal_region_mask(
                 image_path,
-                region,
+                request_plan.region,
                 output_dir=output_dir,
-                prompt=prompt,
+                prompt=request_plan.prompt,
                 negative_prompt=negative_prompt,
                 semantic_type=semantic_type,
                 fill_holes=fill_holes,
                 expand_mask=expand_mask,
                 blur_mask=blur_mask,
                 use_grounding_dino=use_grounding_dino,
-                revert_mask=revert_mask,
+                revert_mask=request_plan.revert_mask,
                 start_timeout_seconds=start_timeout_seconds,
                 client_timeout_seconds=client_timeout_seconds,
             ),
             requested_provider=active_provider,
             fallback_used=True,
+            requested_prompt=request_plan.requested_prompt,
+            effective_prompt=request_plan.effective_prompt,
+            revert_mask=request_plan.revert_mask if isinstance(request_plan.revert_mask, bool) else None,
+            attempt_strategy=request_plan.strategy if request_plan.fallback_used else None,
         )
 
 

@@ -18,9 +18,8 @@ from app.api.schemas import (
 )
 from app.services.asset_store import AssetStore
 from app.services.planner_param_codec import normalize_runtime_tool_params
-from app.tools import require_tool, require_tool_spec
-from app.tools.common import ToolExecutionResult
-from app.tools.segmentation_tools import resolve_region_mask
+from app.services.tool_runtime import execute_tool_lab_chain, generate_mask
+from app.tools import require_tool_spec
 
 
 router = APIRouter(prefix="/tool-lab", tags=["tool-lab"])
@@ -49,13 +48,14 @@ async def generate_tool_lab_mask(
 
     work_dir = _tool_lab_work_dir(asset_store, purpose="masks")
     try:
-        # 这里显式走 resolve_region_mask，
-        # 让前端测试页也复用正式的分割 provider 选择与 fallback 逻辑。
-        result = resolve_region_mask(
+        result = generate_mask(
             input_record.local_path,
-            payload.prompt,
-            provider=payload.provider,
-            prompt=payload.prompt,
+            region=payload.prompt,
+            mask_params={
+                "mask_provider": payload.provider,
+                "mask_prompt": payload.prompt,
+                "mask_semantic_type": True,
+            },
             output_dir=str(work_dir),
         )
     except Exception as exc:
@@ -103,12 +103,12 @@ async def run_tool_lab_pipeline(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Input asset not found.") from exc
 
-    current_record = input_record
+    mask_records_by_path: dict[str, object] = {}
+    runtime_steps: list[dict[str, object]] = []
     step_results: list[ToolLabStepResultResponse] = []
 
     for index, step in enumerate(payload.steps):
         try:
-            tool = require_tool(step.tool_name)
             tool_spec = require_tool_spec(step.tool_name)
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=f"Unknown tool: {step.tool_name}") from exc
@@ -129,66 +129,46 @@ async def run_tool_lab_pipeline(
             )
 
         runtime_params = normalize_runtime_tool_params(step.tool_name, step.params)
-        tool_input = {
-            "image_path": current_record.local_path,
-            **runtime_params,
-        }
+        tool_params = dict(runtime_params)
         if mask_record is not None:
-            tool_input["mask_path"] = mask_record.local_path
-
-        try:
-            # 工具实验室保持最直接的串行语义：
-            # 上一步输出图就是下一步输入图，便于肉眼对比每一步效果。
-            raw_result = tool.invoke(tool_input)
-            result = ToolExecutionResult.model_validate(raw_result)
-        except Exception as exc:
-            step_results.append(
-                ToolLabStepResultResponse(
-                    index=index,
-                    tool_name=step.tool_name,
-                    ok=False,
-                    input_asset=_build_asset_response(request, current_record),
-                    output_asset=None,
-                    mask_asset=_build_asset_response(request, mask_record) if mask_record is not None else None,
-                    applied_params=runtime_params,
-                    warnings=[],
-                    artifacts={},
-                    fallback_used=True,
-                    error=str(exc),
-                )
-            )
-            break
-
-        if not result.ok or not result.output_image:
-            step_results.append(
-                ToolLabStepResultResponse(
-                    index=index,
-                    tool_name=step.tool_name,
-                    ok=False,
-                    input_asset=_build_asset_response(request, current_record),
-                    output_asset=None,
-                    mask_asset=_build_asset_response(request, mask_record) if mask_record is not None else None,
-                    applied_params=result.applied_params,
-                    warnings=list(result.warnings),
-                    artifacts=dict(result.artifacts),
-                    fallback_used=bool(result.fallback_used),
-                    error=result.error or f"{step.tool_name} did not produce an output image.",
-                )
-            )
-            break
-
-        output_record = asset_store.save_generated(
-            result.output_image,
-            filename=Path(result.output_image).name,
-            media_type="image/png",
+            tool_params["mask_path"] = mask_record.local_path
+            mask_records_by_path[mask_record.local_path] = mask_record
+        runtime_steps.append(
+            {
+                "op": step.tool_name,
+                "region": "masked_region" if mask_record is not None else "whole_image",
+                "params": tool_params,
+                "priority": index,
+            }
         )
+
+    final_output_path, runtime_results = execute_tool_lab_chain(
+        input_image_path=input_record.local_path,
+        steps=runtime_steps,
+        writer=lambda *_args, **_kwargs: None,
+    )
+    records_by_path: dict[str, object] = {input_record.local_path: input_record}
+    final_record = input_record
+    for result in runtime_results:
+        input_asset = records_by_path.get(result.input_image_path, final_record)
+        output_asset = None
+        if result.output_image_path:
+            output_record = asset_store.save_generated(
+                result.output_image_path,
+                filename=Path(result.output_image_path).name,
+                media_type="image/png",
+            )
+            records_by_path[result.output_image_path] = output_record
+            output_asset = _build_asset_response(request, output_record)
+            final_record = output_record
+        mask_record = mask_records_by_path.get(result.mask_path or "")
         step_results.append(
             ToolLabStepResultResponse(
-                index=index,
-                tool_name=step.tool_name,
-                ok=True,
-                input_asset=_build_asset_response(request, current_record),
-                output_asset=_build_asset_response(request, output_record),
+                index=result.index,
+                tool_name=result.tool_name,
+                ok=result.ok,
+                input_asset=_build_asset_response(request, input_asset),
+                output_asset=output_asset,
                 mask_asset=_build_asset_response(request, mask_record) if mask_record is not None else None,
                 applied_params=result.applied_params,
                 warnings=list(result.warnings),
@@ -197,10 +177,11 @@ async def run_tool_lab_pipeline(
                 error=result.error,
             )
         )
-        current_record = output_record
+        if not result.ok:
+            break
 
     return ToolLabRunResponse(
         input_asset=_build_asset_response(request, input_record),
-        final_output_asset=_build_asset_response(request, current_record),
+        final_output_asset=_build_asset_response(request, final_record),
         steps=step_results,
     )

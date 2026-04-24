@@ -24,7 +24,7 @@ def adjust_point_color(
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
-    """Use this tool when one very specific color value or a narrow color neighborhood needs correction, such as a slightly yellow white dress or a small dirty skin patch. It is more precise than color mixer, so prefer it when broad color-band edits would cause unwanted spill into nearby colors."""
+    """Use this tool when one very specific color value or a narrow color neighborhood needs correction, such as a small dirty skin patch or a localized color cast. It is more precise than color mixer, so prefer it when broad color-band edits would cause unwanted spill into nearby colors."""
 
     output_path = temp_output_path("psagent_point_color_")
     saved_path = apply_point_color_adjustment(
@@ -63,7 +63,7 @@ ADJUST_POINT_COLOR_SPEC = ToolSpec(
     label="精准点颜色",
     description="Adjust a narrow target color band with hue, saturation, and luminance shifts.",
     family="color",
-    stage_affinity=["local_balance", "subject_refine"],
+    focus_affinity=["subject_separation", "subject_cleanup"],
     supports_mask=True,
     supports_whole_image=True,
     default_params={

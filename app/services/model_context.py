@@ -83,6 +83,7 @@ def compact_request_intent_for_model(request_intent: RequestIntent | dict[str, A
         payload = dict(request_intent or {})
     compact: dict[str, Any] = {
         "mode": payload.get("mode"),
+        "goals": payload.get("goals", []),
         "constraints": payload.get("constraints", []),
         "goal_summary": payload.get("goal_summary"),
         "wants_repair": payload.get("wants_repair"),
@@ -90,9 +91,9 @@ def compact_request_intent_for_model(request_intent: RequestIntent | dict[str, A
         "requires_local_editing": payload.get("requires_local_editing"),
     }
 
-    requested_packages = []
-    for item in payload.get("requested_packages", []) or []:
-        requested_packages.append(
+    requested_tools = []
+    for item in payload.get("requested_tools", []) or []:
+        requested_tools.append(
             {
                 "op": item.get("op"),
                 "region": item.get("region"),
@@ -100,7 +101,7 @@ def compact_request_intent_for_model(request_intent: RequestIntent | dict[str, A
                 "params": item.get("params", {}),
             }
         )
-    compact["requested_packages"] = requested_packages
+    compact["requested_tools"] = requested_tools
     return compact
 
 
@@ -114,7 +115,21 @@ def compact_image_analysis_for_model(image_analysis: AnalyzeImageResult | dict[s
     metrics = dict(payload.get("metrics") or {})
     compact_metrics = {
         key: metrics[key]
-        for key in ("brightness_mean", "brightness_std", "shadow_ratio", "highlight_ratio")
+        for key in (
+            "brightness_mean",
+            "brightness_std",
+            "shadow_ratio",
+            "highlight_ratio",
+            "midtone_ratio",
+            "saturation_mean",
+            "local_contrast_mean",
+            "dynamic_range",
+            "color_cast_rgb",
+            "exposure_histogram",
+            "subject_luminance_mean",
+            "background_luminance_mean",
+            "skin_luminance_mean",
+        )
         if key in metrics
     }
     compact: dict[str, Any] = {
@@ -216,6 +231,25 @@ def compact_execution_trace_for_model(
     return compact_items
 
 
+def compact_fallback_trace_for_model(
+    fallback_trace: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Build a compact fallback summary for model consumption."""
+
+    compact_items: list[dict[str, Any]] = []
+    for item in fallback_trace or []:
+        if not isinstance(item, dict):
+            continue
+        compact_item: dict[str, Any] = {}
+        for key in ("round_id", "focus", "candidate_id", "source", "location", "strategy", "message", "error"):
+            value = item.get(key)
+            if value not in (None, "", [], {}):
+                compact_item[key] = value
+        if compact_item:
+            compact_items.append(compact_item)
+    return compact_items
+
+
 def shared_mask_params_for_model(
     tool_catalog: list[ToolCatalogItem | dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -265,6 +299,18 @@ def compact_tool_catalog_for_model(
         mask_policy = payload.get("mask_policy")
         if mask_policy and mask_policy != "none":
             compact_item["mask_policy"] = mask_policy
+        if payload.get("requires_mask"):
+            compact_item["requires_mask"] = True
+        recommended_mask_prompt = payload.get("recommended_mask_prompt")
+        if recommended_mask_prompt:
+            compact_item["recommended_mask_prompt"] = recommended_mask_prompt
+        recommended_mask_prompts = payload.get("recommended_mask_prompts") or []
+        if recommended_mask_prompts:
+            compact_item["recommended_mask_prompts"] = recommended_mask_prompts
+        if payload.get("selection_guidance"):
+            compact_item["selection_guidance"] = payload.get("selection_guidance")
+        if payload.get("conflict_tools"):
+            compact_item["conflict_tools"] = payload.get("conflict_tools")
 
         risk_level = payload.get("risk_level")
         if risk_level:

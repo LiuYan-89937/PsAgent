@@ -12,8 +12,6 @@ from langgraph.types import Command
 
 from app.graph.state import ErrorDetail, JobEvent, coerce_job_events
 from app.services.job_store import JobStore
-from app.services.stage_policy import STAGE_LABELS, STAGE_ORDER
-from app.tools import TOOL_STATUS_LABELS
 
 
 NODE_STATUS_LABELS = {
@@ -21,31 +19,24 @@ NODE_STATUS_LABELS = {
     "load_context": "正在加载上下文",
     "analyze_image": "正在分析图片",
     "parse_request": "正在理解用户需求",
-    "build_edit_profile": "正在建立修图画像",
-    "technical_prep_subgraph": "正在执行技术预处理",
-    "global_base_subgraph": "正在执行全局基线",
-    "local_balance_subgraph": "正在执行局部平衡",
-    "subject_refine_subgraph": "正在执行主体优化",
-    "finish_output_subgraph": "正在执行最终收尾",
+    "build_objective": "正在建立搜索目标",
+    "run_search_agent": "正在搜索候选方案",
     "final_review": "正在评估最终结果",
-    "execute_generative": "正在执行生成式编辑",
-    "evaluate_result": "正在评估结果",
     "human_review": "等待人工确认",
     "update_memory": "正在更新记忆",
 }
 
-for _stage_key in STAGE_ORDER:
-    _label = STAGE_LABELS[_stage_key]
-    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_prepare_stage_context", f"正在准备{_label}上下文")
-    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_build_stage_plan", f"正在规划{_label}")
-    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_execute_stage_plan", f"正在执行{_label}")
-    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_stage_guard", f"正在检查{_label}")
-    NODE_STATUS_LABELS.setdefault(f"{_stage_key}_summarize_stage", f"正在总结{_label}")
+FOCUS_LABELS = {
+    "global_tone": "整体影调",
+    "subject_separation": "主体分离",
+    "subject_cleanup": "主体清理",
+    "finish": "最终收口",
+}
+
 
 def build_error_detail(
     exc: Exception,
     *,
-    stage: str | None = None,
     node: str | None = None,
     op: str | None = None,
     region: str | None = None,
@@ -56,7 +47,6 @@ def build_error_detail(
     detail = ErrorDetail(
         type=exc.__class__.__name__,
         message=str(exc),
-        stage=stage,
         node=node,
         op=op,
         region=region,
@@ -76,8 +66,6 @@ def make_event(event: str, **payload: Any) -> JobEvent:
 
 
 def _stamp_event(event: JobEvent | dict[str, Any]) -> JobEvent:
-    """Attach an occurrence timestamp to an event when missing."""
-
     normalized = coerce_job_events([event])[0]
     if normalized.occurred_at:
         return normalized
@@ -94,63 +82,61 @@ def format_sse(event: str, data: JobEvent | dict[str, Any]) -> str:
 
 
 def append_job_event(job_store: JobStore, job_id: str, event: JobEvent | dict[str, Any]) -> dict[str, Any]:
-    """Persist a job event, update current stage/message, and return the stamped event."""
+    """Persist a job event, update current round/message, and return the stamped event."""
 
     stamped_event = _stamp_event(event)
     job_store.append_event(
         job_id,
         stamped_event,
-        current_stage=stamped_event.stage,
+        current_round=stamped_event.round,
+        current_focus=stamped_event.focus,
         current_message=stamped_event.message,
     )
     return stamped_event.model_dump(mode="json")
 
 
-def compute_stage_timings(events: list[JobEvent | dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build stage timing summaries from persisted node lifecycle events."""
+def compute_round_timings(events: list[JobEvent | dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build timing summaries from round lifecycle events."""
 
-    open_stages: dict[str, dict[str, Any]] = {}
+    open_rounds: dict[str, dict[str, Any]] = {}
     timings: list[dict[str, Any]] = []
-
     for normalized in coerce_job_events(events):
         event_type = str(normalized.event or "")
-        stage = normalized.stage or normalized.node
+        round_id = normalized.round
         occurred_at = normalized.occurred_at
-        if not isinstance(stage, str) or not isinstance(occurred_at, str):
+        if not isinstance(round_id, str) or not isinstance(occurred_at, str):
             continue
         try:
             timestamp = datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
         except ValueError:
             continue
-
-        if event_type == "node_started":
-            open_stages[stage] = {
-                "stage": stage,
+        if event_type == "round_started":
+            open_rounds[round_id] = {
+                "round": round_id,
+                "focus": normalized.focus,
                 "started_at": occurred_at,
                 "started_dt": timestamp,
             }
             continue
-
-        if event_type not in {"node_finished", "node_failed"}:
+        if event_type not in {"round_completed", "round_failed"}:
             continue
-
-        started = open_stages.pop(stage, None)
+        started = open_rounds.pop(round_id, None)
         if started is None:
             continue
-
         duration_ms = max(int((timestamp - started["started_dt"]).total_seconds() * 1000), 0)
+        focus = started.get("focus") or normalized.focus
         timings.append(
             {
-                "stage": stage,
-                "label": NODE_STATUS_LABELS.get(stage, stage),
+                "round": round_id,
+                "focus": focus,
+                "label": FOCUS_LABELS.get(str(focus), round_id),
                 "started_at": started["started_at"],
                 "ended_at": occurred_at,
                 "duration_ms": duration_ms,
                 "duration_seconds": round(duration_ms / 1000.0, 3),
-                "status": "failed" if event_type == "node_failed" else "completed",
+                "status": "failed" if event_type == "round_failed" else "completed",
             }
         )
-
     return timings
 
 
@@ -176,69 +162,57 @@ def iter_graph_events(
             if "input" in payload and "result" not in payload and "error" not in payload:
                 event = make_event(
                     "node_started",
-                    stage=name,
                     node=name,
                     message=NODE_STATUS_LABELS.get(name, f"正在执行 {name}"),
                 )
-                event = append_job_event(job_store, job_id, event)
-                yield event
+                yield append_job_event(job_store, job_id, event)
             elif payload.get("interrupts"):
                 interrupt_payload = payload["interrupts"][0]
                 event = make_event(
                     "interrupt",
-                    stage=name,
                     node=name,
                     interrupt_id=interrupt_payload.get("id"),
                     payload=interrupt_payload.get("value"),
                     message=NODE_STATUS_LABELS.get(name, "等待人工确认"),
                 )
-                event = append_job_event(job_store, job_id, event)
-                yield event
+                yield append_job_event(job_store, job_id, event)
             elif payload.get("error") is not None:
                 error_obj = payload.get("error")
                 event = make_event(
                     "node_failed",
-                    stage=name,
                     node=name,
                     message=f"{NODE_STATUS_LABELS.get(name, name)}失败",
                     error=str(error_obj),
                     error_detail={
                         "type": type(error_obj).__name__,
                         "message": str(error_obj),
-                        "stage": name,
                         "node": name,
                     },
                 )
-                event = append_job_event(job_store, job_id, event)
-                yield event
+                yield append_job_event(job_store, job_id, event)
             else:
                 event = make_event(
                     "node_finished",
-                    stage=name,
                     node=name,
                     ok=payload.get("error") is None,
                     message=f"{NODE_STATUS_LABELS.get(name, name)}完成",
                 )
-                event = append_job_event(job_store, job_id, event)
-                yield event
+                yield append_job_event(job_store, job_id, event)
 
         elif mode == "custom":
             event = payload if isinstance(payload, dict) else make_event("custom", payload=payload)
-            event = append_job_event(job_store, job_id, event)
-            yield event
+            yield append_job_event(job_store, job_id, event)
 
         elif mode == "updates" and "__interrupt__" in payload:
             interrupt_obj = payload["__interrupt__"][0]
             event = make_event(
                 "interrupt",
-                stage="human_review",
                 node="human_review",
                 interrupt_id=getattr(interrupt_obj, "id", None),
                 payload=getattr(interrupt_obj, "value", None),
                 message=NODE_STATUS_LABELS["human_review"],
             )
-            event = append_job_event(job_store, job_id, event)
-            yield event
+            yield append_job_event(job_store, job_id, event)
 
 
 def build_graph_config(thread_id: str) -> dict[str, Any]:

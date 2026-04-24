@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_regional_enhancement
 
 
@@ -23,6 +23,7 @@ def adjust_hair_enhance(
 ) -> dict:
     """Use this tool when hair should have more texture, separation, and controlled shine without affecting skin or background. It is a hair-region portrait tool and should be used with a hair mask instead of across the full frame."""
 
+    require_mask_path("adjust_hair_enhance", mask_path, recommended_prompt="hair")
     output_path = temp_output_path("psagent_hair_enhance_")
     saved_path = apply_regional_enhancement(
         image_path,
@@ -59,7 +60,7 @@ ADJUST_HAIR_ENHANCE_SPEC = ToolSpec(
     label="发丝质感增强",
     description="Enhance hair texture and clarity while keeping highlights controlled.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

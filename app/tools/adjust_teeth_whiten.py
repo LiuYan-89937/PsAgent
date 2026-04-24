@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_teeth_whiten_adjustment
 
 
@@ -23,6 +23,7 @@ def adjust_teeth_whiten(
 ) -> dict:
     """Use this tool when teeth need a restrained whitening effect by reducing yellow cast and slightly lifting brightness. It is a teeth-only local portrait tool and should never be treated as a general global brightening or color-cleanup tool."""
 
+    require_mask_path("adjust_teeth_whiten", mask_path, recommended_prompt="teeth")
     output_path = temp_output_path("psagent_teeth_whiten_")
     saved_path = apply_teeth_whiten_adjustment(
         image_path,
@@ -54,7 +55,7 @@ ADJUST_TEETH_WHITEN_SPEC = ToolSpec(
     label="牙齿美白",
     description="Whiten teeth by reducing yellow cast and lifting restrained luminance.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

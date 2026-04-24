@@ -1,4 +1,4 @@
-"""Deterministic image operations used by tool packages."""
+"""Deterministic image operations used by native tools."""
 
 from __future__ import annotations
 

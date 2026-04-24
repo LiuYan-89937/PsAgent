@@ -13,7 +13,7 @@ from app.tools.common.mask_contracts import (
     MASK_PARAMS_SCHEMA,
     MaskParams,
 )
-from app.tools.common.tool_utils import build_result, temp_output_path
+from app.tools.common.tool_utils import build_result, require_mask_path, temp_output_path
 
 __all__ = [
     "MASKED_REGION_MODE",
@@ -26,5 +26,6 @@ __all__ = [
     "build_planner_schema",
     "build_result",
     "execution_modes_for_spec",
+    "require_mask_path",
     "temp_output_path",
 ]

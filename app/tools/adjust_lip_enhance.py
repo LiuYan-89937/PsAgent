@@ -7,7 +7,7 @@ from typing import Annotated
 from langchain.tools import tool
 from pydantic import Field
 
-from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, temp_output_path
+from app.tools.common import MASK_PARAMS_SCHEMA, ToolSpec, build_planner_schema, build_result, require_mask_path, temp_output_path
 from app.tools.image_ops import apply_lip_enhance_adjustment
 
 
@@ -24,6 +24,7 @@ def adjust_lip_enhance(
 ) -> dict:
     """Use this tool when lips need stronger color presence, slightly brighter tone, or a touch of gloss while preserving texture. It is a lip-region portrait enhancement tool and should be used with a lips mask rather than globally."""
 
+    require_mask_path("adjust_lip_enhance", mask_path, recommended_prompt="lips")
     output_path = temp_output_path("psagent_lip_enhance_")
     saved_path = apply_lip_enhance_adjustment(
         image_path,
@@ -57,7 +58,7 @@ ADJUST_LIP_ENHANCE_SPEC = ToolSpec(
     label="唇色增强",
     description="Enhance lip color and gloss while preserving texture.",
     family="portrait",
-    stage_affinity=["subject_refine"],
+    focus_affinity=["subject_cleanup"],
     supports_mask=True,
     requires_mask=True,
     supports_whole_image=False,

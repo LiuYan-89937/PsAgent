@@ -42,21 +42,13 @@ from app.tools.common import (
     temp_output_path,
 )
 from app.tools.tool_metadata import (
-    ALL_TOOL_METADATA,
-    ALL_TOOL_NAMES,
-    MACRO_TOOL_NAMES,
     PARSE_REQUEST_KEYWORDS,
-    TOOL_STATUS_LABELS,
-    TOOL_METADATA_BY_NAME,
     WHOLE_IMAGE_ONLY_TOOL_NAMES,
-    ToolMetadata,
     validate_tool_name,
 )
 
 
 __all__ = [
-    "ALL_TOOL_METADATA",
-    "ALL_TOOL_NAMES",
     "COLOR_NATIVE_TOOLS",
     "COLOR_TOOL_NAMES",
     "COLOR_TOOL_SPECS",
@@ -69,7 +61,6 @@ __all__ = [
     "MASKED_REGION_MODE",
     "MASK_PARAM_KEYS",
     "MASK_PARAMS_SCHEMA",
-    "MACRO_TOOL_NAMES",
     "MaskParams",
     "NATIVE_TOOLS",
     "PARSE_REQUEST_KEYWORDS",
@@ -77,15 +68,12 @@ __all__ = [
     "PORTRAIT_TOOL_NAMES",
     "PORTRAIT_TOOL_SPECS",
     "TOOLS_BY_NAME",
-    "TOOL_METADATA_BY_NAME",
     "TOOL_SPECS",
     "TOOL_SPECS_BY_NAME",
-    "TOOL_STATUS_LABELS",
     "TONE_NATIVE_TOOLS",
     "TONE_TOOL_NAMES",
     "TONE_TOOL_SPECS",
     "ToolExecutionResult",
-    "ToolMetadata",
     "ToolSpec",
     "WHOLE_IMAGE_ONLY_TOOL_NAMES",
     "WHOLE_IMAGE_REGION",
