@@ -160,6 +160,18 @@ const timelineEvents = computed<JobEvent[]>(() => (
             </div>
           </div>
 
+          <div v-if="round.guidance" class="guidance-card">
+            <div>
+              <p class="eyebrow">Round guidance</p>
+              <h5>{{ round.guidance.target_prompt || '本轮导向提示词' }}</h5>
+              <p v-if="round.guidance.visual_diagnosis">{{ round.guidance.visual_diagnosis }}</p>
+            </div>
+            <div v-if="round.guidance.preserve.length || round.guidance.avoid.length" class="guidance-tags">
+              <span v-for="item in round.guidance.preserve" :key="`preserve-${round.id}-${item}`">保留 · {{ item }}</span>
+              <span v-for="item in round.guidance.avoid" :key="`avoid-${round.id}-${item}`">避免 · {{ item }}</span>
+            </div>
+          </div>
+
           <div class="candidate-grid">
             <article
               v-for="candidate in round.candidates"
@@ -329,7 +341,8 @@ const timelineEvents = computed<JobEvent[]>(() => (
 .candidate-top,
 .commit-card,
 .review-card,
-.recovery-card {
+.recovery-card,
+.guidance-card {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -341,7 +354,8 @@ const timelineEvents = computed<JobEvent[]>(() => (
 .candidate-top h5,
 .commit-card h5,
 .review-card h5,
-.recovery-card h5 {
+.recovery-card h5,
+.guidance-card h5 {
   margin: 0;
 }
 
@@ -425,6 +439,7 @@ const timelineEvents = computed<JobEvent[]>(() => (
 .commit-card p,
 .review-card p,
 .recovery-card p,
+.guidance-card p,
 .timing-card p {
   margin: 6px 0 0;
   color: var(--text-muted);
@@ -457,6 +472,30 @@ const timelineEvents = computed<JobEvent[]>(() => (
 
 .candidate-grid {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.guidance-card {
+  margin: 14px 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(125, 211, 252, 0.08);
+  border: 1px solid rgba(125, 211, 252, 0.18);
+}
+
+.guidance-tags {
+  display: flex;
+  flex: 0 0 220px;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.guidance-tags span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 0.76rem;
 }
 
 .candidate-card {
@@ -548,8 +587,14 @@ const timelineEvents = computed<JobEvent[]>(() => (
   .candidate-top,
   .commit-card,
   .review-card,
-  .recovery-card {
+  .recovery-card,
+  .guidance-card {
     flex-direction: column;
+  }
+
+  .guidance-tags {
+    flex-basis: auto;
+    justify-content: flex-start;
   }
 
   .trace-row {

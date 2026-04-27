@@ -2,9 +2,90 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from langgraph.types import interrupt
 
-from app.graph.state import ApprovalPayload, EditState
+from app.graph.state import ApprovalPayload, EditState, FocusKey, ObjectiveCard, ObjectiveGap, coerce_objective_card
+from app.services.search_agent.config import normalize_search_effort
+
+
+ACCEPT_FINAL_NOTES = {"ok", "okay", "pass", "approve", "approved", "通过", "确认", "可以", "没问题"}
+SUBJECT_TOKENS = ("人物", "主体", "面部", "脸", "人像", "person", "subject", "face")
+BACKGROUND_TOKENS = ("背景", "暗部", "黑位", "氛围", "反差", "高反差", "background", "shadow", "contrast")
+HIGHLIGHT_TOKENS = ("高光", "过曝", "白裙", "白场", "压高光", "highlight", "overexposed", "white")
+BRIGHTNESS_TOKENS = ("提亮", "曝光", "亮度", "偏暗", "更亮", "bright", "exposure")
+SKIN_TOKENS = ("肤色", "皮肤", "磨皮", "塑料感", "skin", "texture")
+DETAIL_TOKENS = ("水珠", "细节", "锐度", "清晰", "detail", "droplet", "clarity")
+
+
+def _clean_note(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _is_accept_final_note(note: str) -> bool:
+    normalized = note.strip().lower()
+    return bool(normalized) and normalized in ACCEPT_FINAL_NOTES
+
+
+def _continuation_instruction(*, note: str, payload: ApprovalPayload) -> str:
+    """Choose the text that should steer a human-requested follow-up round."""
+
+    if note and not _is_accept_final_note(note):
+        return note
+    for value in (payload.suggested_action, payload.summary):
+        text = _clean_note(value)
+        if text:
+            return text
+    return ""
+
+
+def _focus_from_instruction(text: str) -> FocusKey:
+    lowered = text.lower()
+    has_subject = any(token in lowered or token in text for token in SUBJECT_TOKENS)
+    has_background = any(token in lowered or token in text for token in BACKGROUND_TOKENS)
+    has_highlight = any(token in lowered or token in text for token in HIGHLIGHT_TOKENS)
+    has_brightness = any(token in lowered or token in text for token in BRIGHTNESS_TOKENS)
+    if has_subject and (has_background or has_brightness):
+        return "subject_separation"
+    if has_background or has_highlight:
+        return "global_tone"
+    if any(token in lowered or token in text for token in SKIN_TOKENS):
+        return "subject_cleanup"
+    if any(token in lowered or token in text for token in DETAIL_TOKENS):
+        return "finish"
+    return "global_tone"
+
+
+def _target_region(focus: FocusKey) -> str:
+    if focus == "subject_separation":
+        return "person and background area"
+    if focus == "subject_cleanup":
+        return "face and skin area"
+    if focus == "finish":
+        return "detail area"
+    return "whole_image"
+
+
+def _append_human_continuation_gap(state: EditState, instruction: str) -> ObjectiveCard:
+    objective = coerce_objective_card(state.get("objective_card")) or ObjectiveCard(
+        summary=str(state.get("request_text") or "人工复核后的继续调整"),
+        mode="auto",
+        domain="general",
+    )
+    focus = _focus_from_instruction(instruction)
+    gap = ObjectiveGap(
+        id=f"human_review_{focus}_{uuid4().hex[:8]}",
+        focus=focus,
+        description=instruction,
+        priority=100,
+        target_region=_target_region(focus),
+        desired_delta=instruction,
+        constraints=["human_review_continuation"],
+    )
+    gaps = list(objective.gaps)
+    gaps.append(gap)
+    return objective.model_copy(update={"gaps": gaps})
 
 
 def human_review(state: EditState) -> dict:
@@ -31,9 +112,11 @@ def human_review(state: EditState) -> dict:
     note = None
     if isinstance(decision, dict):
         approved = bool(decision.get("approved"))
-        note = decision.get("note")
+        note = _clean_note(decision.get("note"))
+        requested_effort = normalize_search_effort(decision.get("search_effort") or state.get("search_effort"))
     else:
         approved = bool(decision)
+        requested_effort = normalize_search_effort(state.get("search_effort"))
 
     metadata = dict(validated.metadata)
     metadata["review_result"] = {
@@ -42,6 +125,10 @@ def human_review(state: EditState) -> dict:
     }
     update = {
         "approval_required": False,
+        "needs_search_continuation": False,
+        "search_continuation_reason": None,
+        "human_review_continuation": False,
+        "search_effort": requested_effort,
         "approval_payload": ApprovalPayload(
             reason=validated.reason,
             summary=validated.summary,
@@ -51,4 +138,17 @@ def human_review(state: EditState) -> dict:
     }
     if not approved:
         update["selected_output"] = None
+    else:
+        instruction = _continuation_instruction(note=note or "", payload=validated)
+        if instruction:
+            objective = _append_human_continuation_gap(state, instruction)
+            update.update(
+                {
+                    "objective_card": objective.model_dump(mode="json"),
+                    "needs_search_continuation": True,
+                    "search_continuation_reason": instruction,
+                    "human_review_continuation": True,
+                    "search_cycle_round_offset": len(list(state.get("rounds") or [])),
+                }
+            )
     return update

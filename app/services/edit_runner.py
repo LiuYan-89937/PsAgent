@@ -192,6 +192,7 @@ def prepare_edit_run(
         "input_images": input_image_paths,
         "request_text": raw_instruction or "",
         "planner_thinking_mode": bool(payload.planner_thinking_mode),
+        "search_effort": payload.search_effort,
         "mode": "auto" if payload.auto_mode else "explicit",
     }
     return PreparedEditRun(

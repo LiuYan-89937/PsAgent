@@ -12,7 +12,7 @@ from app.graph.fallbacks import append_fallback_trace
 from app.graph.state import AnalyzeImageResult, EditState, ImageQualityMetrics
 from app.services.analyze_image_model import (
     analyze_image_model_available,
-    generate_image_analysis_with_qwen,
+    generate_image_analysis,
 )
 
 
@@ -176,7 +176,7 @@ def analyze_image(state: EditState) -> dict:
     basic_analysis = _compute_basic_image_analysis(input_images[0])
     if analyze_image_model_available():
         try:
-            model_analysis = generate_image_analysis_with_qwen(
+            model_analysis = generate_image_analysis(
                 image_path=input_images[0],
                 request_text=str(state.get("request_text") or ""),
                 basic_metrics=basic_analysis["metrics"],

@@ -14,10 +14,22 @@ from app.graph.nodes.update_memory import update_memory
 from app.graph.state import EditState, GraphInputState, GraphOutputState
 
 
-def need_review(state: EditState) -> str:
-    """Route to review when the current result requires confirmation."""
+def route_after_final_review(state: EditState) -> str:
+    """Route after final review, allowing bounded auto continuation."""
 
-    return "review" if state.get("approval_required") else "ok"
+    if state.get("approval_required"):
+        return "review"
+    if state.get("needs_search_continuation"):
+        return "continue"
+    return "ok"
+
+
+def route_after_human_review(state: EditState) -> str:
+    """Route after human review, allowing the reviewer note to drive one more round."""
+
+    if state.get("needs_search_continuation"):
+        return "continue"
+    return "ok"
 
 
 def build_graph(checkpointer=None, store=None):
@@ -50,14 +62,22 @@ def build_graph(checkpointer=None, store=None):
 
     builder.add_conditional_edges(
         "final_review",
-        need_review,
+        route_after_final_review,
         {
             "review": "human_review",
+            "continue": "run_search_agent",
             "ok": "update_memory",
         },
     )
 
-    builder.add_edge("human_review", "update_memory")
+    builder.add_conditional_edges(
+        "human_review",
+        route_after_human_review,
+        {
+            "continue": "run_search_agent",
+            "ok": "update_memory",
+        },
+    )
     builder.add_edge("update_memory", END)
 
     return builder.compile(checkpointer=checkpointer, store=store)

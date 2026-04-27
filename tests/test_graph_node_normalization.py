@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -33,8 +34,6 @@ class GraphNodeNormalizationTest(unittest.TestCase):
         self.assertTrue(all("name" in item for item in result["tool_catalog"]))
 
     def test_parse_request_returns_valid_request_intent(self) -> None:
-        from unittest.mock import patch
-
         with patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=False):
             result = parse_request({"request_text": "把背景稍微压暗一点并提亮主体"})
 
@@ -60,6 +59,40 @@ class GraphNodeNormalizationTest(unittest.TestCase):
     def test_human_review_normalizes_payload(self) -> None:
         result = human_review({"approval_payload": {"reason": "mask edge", "summary": "需要人工确认"}})
         self.assertEqual(result["approval_payload"]["reason"], "mask edge")
+
+    def test_human_review_note_requests_continuation_gap(self) -> None:
+        with patch(
+            "app.graph.nodes.human_review.interrupt",
+            return_value={"approved": True, "note": "背景压暗一点，高光压住，保留反差氛围", "search_effort": "ultra"},
+        ):
+            result = human_review(
+                {
+                    "request_text": "保留逆光氛围",
+                    "approval_payload": {
+                        "reason": "final_review_unresolved_after_max_rounds",
+                        "summary": "背景暗部抬灰，高光略过曝。",
+                        "suggested_action": "按人工意见继续调整。",
+                    },
+                    "objective_card": {
+                        "summary": "保留逆光氛围",
+                        "mode": "auto",
+                        "domain": "portrait",
+                        "preserve": ["identity"],
+                        "goals": [],
+                        "gaps": [],
+                        "constraints": [],
+                    },
+                    "rounds": [{"id": "round_1", "index": 1, "focus": "finish", "completed": True}],
+                }
+            )
+
+        self.assertTrue(result["needs_search_continuation"])
+        self.assertTrue(result["human_review_continuation"])
+        gap = result["objective_card"]["gaps"][-1]
+        self.assertEqual(gap["focus"], "global_tone")
+        self.assertIn("human_review_continuation", gap["constraints"])
+        self.assertEqual(result["search_effort"], "ultra")
+        self.assertEqual(result["search_cycle_round_offset"], 1)
 
     def test_update_memory_normalizes_candidates(self) -> None:
         result = update_memory(

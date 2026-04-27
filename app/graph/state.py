@@ -17,6 +17,7 @@ ExecutorKind = Literal["deterministic", "generative", "hybrid"]
 FocusKey = Literal["global_tone", "subject_separation", "subject_cleanup", "finish"]
 CandidateSource = Literal["model", "rule", "variant", "noop", "direct", "recovery"]
 RoundAction = Literal["keep", "recover_same_round", "stop_round"]
+SearchEffort = Literal["standard", "high", "ultra"]
 
 
 class GraphInputState(TypedDict, total=False):
@@ -28,6 +29,7 @@ class GraphInputState(TypedDict, total=False):
     request_text: str
     mode: str
     planner_thinking_mode: bool
+    search_effort: SearchEffort
     messages: list[Any]
 
 
@@ -46,7 +48,12 @@ class GraphOutputState(TypedDict, total=False):
     selected_candidate_id: str | None
     final_review: EvaluationReport | None
     final_execution_trace: list[ExecutionTraceItem]
+    needs_search_continuation: bool
+    search_continuation_reason: str | None
+    human_review_continuation: bool
+    search_cycle_round_offset: int
     approval_required: bool
+    approval_payload: ApprovalPayload | None
 
 
 class ImageQualityMetrics(BaseModel):
@@ -422,6 +429,17 @@ class CandidateProgram(BaseModel):
     is_recovery: bool = False
 
 
+class RoundGuidance(BaseModel):
+    """Model guidance for one round based only on current image and current target."""
+
+    focus: FocusKey
+    target_prompt: str = ""
+    visual_diagnosis: str = ""
+    preserve: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    candidate_programs: list[CandidateProgram] = Field(default_factory=list)
+
+
 class CandidatePreviewExecution(BaseModel):
     """Preview execution facts for one candidate or committed full-res execution."""
 
@@ -492,6 +510,7 @@ class SearchRoundArtifact(BaseModel):
     output_image_path: str | None = None
     output_asset_id: str | None = None
     objective_gaps: list[ObjectiveGap] = Field(default_factory=list)
+    guidance: RoundGuidance | None = None
     candidates: list[SearchCandidateArtifact] = Field(default_factory=list)
     selected_candidate_id: str | None = None
     selected_full_execution: CandidatePreviewExecution | None = None
@@ -574,6 +593,7 @@ class RequestContextState(TypedDict, total=False):
     mode: str
     request_text: str | None
     planner_thinking_mode: bool
+    search_effort: SearchEffort
     request_intent: RequestIntent | None
 
 
@@ -610,6 +630,10 @@ class ReviewArtifactsState(TypedDict, total=False):
     final_review: EvaluationReport | None
     selected_output: str | None
     memory_write_candidates: list[MemoryWriteCandidate]
+    needs_search_continuation: bool
+    search_continuation_reason: str | None
+    human_review_continuation: bool
+    search_cycle_round_offset: int
     approval_required: bool
     approval_payload: ApprovalPayload | None
 

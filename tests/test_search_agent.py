@@ -5,8 +5,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.graph.state import CandidateProgram, MaskCatalog, ObjectiveCard, ObjectiveGap, PlannerExecutionStep, RequestIntent
+from app.graph.state import CandidateProgram, MaskCatalog, ObjectiveCard, ObjectiveGap, PlannerExecutionStep, RequestIntent, RoundGuidance
+from app.graph.nodes.run_search_agent import run_search_agent
 from app.services.search_agent.orchestrator import run_search_first_agent
+from app.services.search_agent.round_guidance_model import build_round_guidance_payload, generate_round_guidance
 from app.services.tool_runtime.chain_executor import ChainExecutionResult
 
 
@@ -87,6 +89,31 @@ def _chain_result(
     )
 
 
+def _program(focus: str, suffix: str, *, steps: int = 1, source: str = "model") -> CandidateProgram:
+    return CandidateProgram(
+        id=f"{focus}_{suffix}",
+        label=f"候选 {suffix}",
+        focus=focus,  # type: ignore[arg-type]
+        source=source,  # type: ignore[arg-type]
+        summary="模型候选",
+        steps=[
+            PlannerExecutionStep(op="adjust_exposure", region="whole_image", params={"strength": 0.2}, priority=index)
+            for index in range(steps)
+        ],
+    )
+
+
+def _guidance(focus: str, *, count: int = 3, steps: int = 1, candidates: list[CandidateProgram] | None = None) -> RoundGuidance:
+    return RoundGuidance(
+        focus=focus,  # type: ignore[arg-type]
+        target_prompt=f"{focus} 本轮导向",
+        visual_diagnosis="只看当前图和当前目标",
+        preserve=["自然质感"],
+        avoid=["过度处理"],
+        candidate_programs=candidates or [_program(focus, str(index), steps=steps) for index in range(count)],
+    )
+
+
 class SearchAgentTest(unittest.TestCase):
     """Verify the search-first agent contract."""
 
@@ -115,6 +142,7 @@ class SearchAgentTest(unittest.TestCase):
             )
 
         with (
+            patch("app.services.search_agent.orchestrator.generate_round_guidance", return_value=_guidance("global_tone")) as guidance_mock,
             patch("app.services.search_agent.orchestrator.execute_preview", side_effect=fake_preview) as preview_mock,
             patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit) as commit_mock,
         ):
@@ -123,11 +151,15 @@ class SearchAgentTest(unittest.TestCase):
                 objective=_objective("global_tone"),
                 request_intent=None,
                 mode="auto",
+                min_rounds=1,
+                max_rounds=1,
             )
 
         self.assertEqual(preview_mock.call_count, 3)
+        self.assertEqual(guidance_mock.call_count, 1)
         self.assertEqual(commit_mock.call_count, 1)
         self.assertEqual(len(result["rounds"][0].candidates), 3)
+        self.assertEqual(result["rounds"][0].guidance.target_prompt, "global_tone 本轮导向")
         self.assertEqual(result["rounds"][0].selected_candidate_id, committed[0])
         self.assertEqual(len(result["final_execution_trace"]), 1)
         self.assertNotIn("preview", result["candidate_outputs"][0])
@@ -157,6 +189,10 @@ class SearchAgentTest(unittest.TestCase):
             )
 
         with (
+            patch(
+                "app.services.search_agent.orchestrator.generate_round_guidance",
+                side_effect=[_guidance("subject_cleanup"), _guidance("subject_cleanup", count=2)],
+            ) as guidance_mock,
             patch("app.services.search_agent.orchestrator.execute_preview", side_effect=fake_preview) as preview_mock,
             patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit),
         ):
@@ -165,11 +201,14 @@ class SearchAgentTest(unittest.TestCase):
                 objective=_objective("subject_cleanup"),
                 request_intent=None,
                 mode="auto",
+                min_rounds=1,
+                max_rounds=1,
             )
 
         round_artifact = result["rounds"][0]
         self.assertTrue(round_artifact.recovery_decision.triggered)
         self.assertEqual(len(round_artifact.recovery_candidates), 2)
+        self.assertEqual(guidance_mock.call_count, 2)
         self.assertEqual(preview_mock.call_count, 5)
         self.assertEqual(len(commit_calls), 2)
         self.assertEqual(round_artifact.recovery_decision.selected_candidate_id, commit_calls[-1])
@@ -215,7 +254,7 @@ class SearchAgentTest(unittest.TestCase):
             )
 
         with (
-            patch("app.services.search_agent.orchestrator.generate_candidates", return_value=[failing, also_failing, noop]),
+            patch("app.services.search_agent.orchestrator.generate_round_guidance", return_value=_guidance("finish", candidates=[failing, also_failing, noop])),
             patch("app.services.search_agent.orchestrator.execute_preview", side_effect=fake_preview),
             patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit),
         ):
@@ -224,11 +263,109 @@ class SearchAgentTest(unittest.TestCase):
                 objective=_objective("finish"),
                 request_intent=None,
                 mode="auto",
+                min_rounds=1,
+                max_rounds=1,
             )
 
         self.assertEqual(result["rounds"][0].selected_candidate_id, "noop")
         self.assertEqual(result["rounds"][0].round_review.recommended_action, "stop_round")
         self.assertEqual(result["final_execution_trace"], [])
+
+    def test_guidance_failure_creates_single_stop_candidate(self) -> None:
+        committed: list[str] = []
+
+        def fake_preview(*, input_image_path, program, round_id, **_kwargs):
+            return _chain_result(
+                input_path=input_image_path,
+                output_path=input_image_path,
+                round_id=round_id,
+                focus=program.focus,
+                candidate_id=program.id,
+                tool_outputs=False,
+            )
+
+        def fake_commit(*, input_image_path, program, round_id, **_kwargs):
+            committed.append(program.id)
+            return _chain_result(
+                input_path=input_image_path,
+                output_path=input_image_path,
+                round_id=round_id,
+                focus=program.focus,
+                candidate_id=program.id,
+                tool_outputs=False,
+            )
+
+        with (
+            patch("app.services.search_agent.orchestrator.generate_round_guidance", side_effect=RuntimeError("bad guidance")),
+            patch("app.services.search_agent.orchestrator.execute_preview", side_effect=fake_preview) as preview_mock,
+            patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit),
+        ):
+            result = run_search_first_agent(
+                input_image_path="/tmp/input.png",
+                objective=_objective("global_tone"),
+                request_intent=None,
+                mode="auto",
+                min_rounds=1,
+                max_rounds=1,
+            )
+
+        round_artifact = result["rounds"][0]
+        self.assertEqual(preview_mock.call_count, 1)
+        self.assertEqual(len(round_artifact.candidates), 1)
+        self.assertEqual(round_artifact.candidates[0].program.source, "noop")
+        self.assertEqual(round_artifact.guidance.visual_diagnosis, "bad guidance")
+        self.assertEqual(round_artifact.selected_candidate_id, committed[0])
+
+    def test_min_rounds_drive_refinement_rounds_before_finish(self) -> None:
+        objective = _objective("global_tone")
+        objective.gaps.append(
+            ObjectiveGap(
+                id="gap_finish",
+                focus="finish",
+                description="收尾",
+                priority=30,
+                target_region="whole_image",
+            )
+        )
+
+        def fake_preview(*, input_image_path, program, round_id, max_steps, **_kwargs):
+            return _chain_result(
+                input_path=input_image_path,
+                output_path=f"/tmp/preview_{program.id}.png",
+                round_id=round_id,
+                focus=program.focus,
+                candidate_id=program.id,
+            )
+
+        def fake_commit(*, input_image_path, program, round_id, **_kwargs):
+            return _chain_result(
+                input_path=input_image_path,
+                output_path=f"/tmp/full_{program.id}.png",
+                round_id=round_id,
+                focus=program.focus,
+                candidate_id=program.id,
+            )
+
+        with (
+            patch("app.services.search_agent.orchestrator.generate_round_guidance", side_effect=lambda **kwargs: _guidance(kwargs["focus"])) as guidance_mock,
+            patch("app.services.search_agent.orchestrator.execute_preview", side_effect=fake_preview) as preview_mock,
+            patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit) as commit_mock,
+        ):
+            result = run_search_first_agent(
+                input_image_path="/tmp/input.png",
+                objective=objective,
+                request_intent=None,
+                mode="auto",
+                min_rounds=4,
+                max_rounds=4,
+            )
+
+        self.assertEqual(len(result["rounds"]), 4)
+        self.assertEqual([round_artifact.focus for round_artifact in result["rounds"]], ["global_tone", "global_tone", "global_tone", "finish"])
+        self.assertEqual(preview_mock.call_count, 12)
+        self.assertEqual(guidance_mock.call_count, 4)
+        self.assertEqual(commit_mock.call_count, 4)
+        self.assertIn("search_refinement_round", result["rounds"][1].objective_gaps[0].constraints)
 
     def test_explicit_mode_uses_direct_round_without_search_preview(self) -> None:
         request_intent = RequestIntent(
@@ -258,7 +395,7 @@ class SearchAgentTest(unittest.TestCase):
             )
 
         with (
-            patch("app.services.search_agent.orchestrator.generate_candidates") as search_mock,
+            patch("app.services.search_agent.orchestrator.generate_round_guidance") as guidance_mock,
             patch("app.services.search_agent.orchestrator.execute_preview") as preview_mock,
             patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit) as commit_mock,
         ):
@@ -269,12 +406,215 @@ class SearchAgentTest(unittest.TestCase):
                 mode="explicit",
             )
 
-        search_mock.assert_not_called()
+        guidance_mock.assert_not_called()
         preview_mock.assert_not_called()
         self.assertEqual(commit_mock.call_count, 1)
         self.assertEqual(len(result["rounds"]), 1)
         self.assertEqual(len(result["rounds"][0].candidates), 1)
         self.assertEqual(result["rounds"][0].candidates[0].program.source, "direct")
+
+    def test_run_search_agent_appends_continuation_round_to_existing_artifacts(self) -> None:
+        continuation_round = {
+            "id": "round_4_subject_separation",
+            "index": 4,
+            "focus": "subject_separation",
+            "output_image_path": "/tmp/new.png",
+            "candidates": [],
+            "selected_candidate_id": "candidate_4",
+            "recovery_candidates": [],
+            "completed": True,
+        }
+
+        with patch(
+            "app.graph.nodes.run_search_agent.run_search_first_agent",
+            return_value={
+                "selected_output": "/tmp/new.png",
+                "candidate_outputs": ["/tmp/new.png"],
+                "execution_trace": [
+                    {
+                        "round_id": "round_4_subject_separation",
+                        "focus": "subject_separation",
+                        "candidate_id": "candidate_4",
+                        "op": "adjust_exposure",
+                        "region": "person area",
+                        "ok": True,
+                        "fallback_used": False,
+                        "output_image": "/tmp/new.png",
+                    }
+                ],
+                "final_execution_trace": [
+                    {
+                        "round_id": "round_4_subject_separation",
+                        "focus": "subject_separation",
+                        "candidate_id": "candidate_4",
+                        "op": "adjust_exposure",
+                        "region": "person area",
+                        "ok": True,
+                        "fallback_used": False,
+                        "output_image": "/tmp/new.png",
+                    }
+                ],
+                "segmentation_trace": [],
+                "fallback_trace": [],
+                "rounds": [continuation_round],
+                "selected_candidate_id": "candidate_4",
+                "edit_plan": {
+                    "mode": "auto",
+                    "domain": "portrait",
+                    "executor": "deterministic",
+                    "preserve": [],
+                    "operations": [
+                        {
+                            "op": "adjust_exposure",
+                            "region": "person area",
+                            "params": {"strength": 0.34},
+                            "constraints": [],
+                            "priority": 0,
+                        }
+                    ],
+                    "should_write_memory": False,
+                    "memory_candidates": [],
+                    "needs_confirmation": False,
+                },
+                "mask_catalog": {"items": {}},
+            },
+        ) as mocked_run:
+            result = run_search_agent(
+                {
+                    "mode": "auto",
+                    "input_images": ["/tmp/input.png"],
+                    "selected_output": "/tmp/current.png",
+                    "objective_card": _objective("subject_separation").model_dump(mode="json"),
+                    "rounds": [
+                        {"id": "round_1", "index": 1, "focus": "finish", "completed": True},
+                        {"id": "round_2", "index": 2, "focus": "finish", "completed": True},
+                        {"id": "round_3", "index": 3, "focus": "finish", "completed": True},
+                    ],
+                    "candidate_outputs": ["/tmp/current.png"],
+                    "execution_trace": [{"round_id": "round_3", "focus": "finish", "op": "adjust_vignette", "ok": True}],
+                    "final_execution_trace": [{"round_id": "round_3", "focus": "finish", "op": "adjust_vignette", "ok": True}],
+                }
+            )
+
+        self.assertEqual(mocked_run.call_args.kwargs["round_index_offset"], 3)
+        self.assertEqual(mocked_run.call_args.kwargs["max_rounds"], 3)
+        self.assertEqual(mocked_run.call_args.kwargs["min_rounds"], 1)
+        self.assertEqual(len(result["rounds"]), 4)
+        self.assertEqual(result["rounds"][-1].id, "round_4_subject_separation")
+        self.assertEqual(len(result["final_execution_trace"]), 2)
+        self.assertFalse(result["needs_search_continuation"])
+
+    def test_run_search_agent_allows_one_human_review_round_after_auto_cap(self) -> None:
+        continuation_round = {
+            "id": "round_5_global_tone",
+            "index": 5,
+            "focus": "global_tone",
+            "output_image_path": "/tmp/new.png",
+            "candidates": [],
+            "selected_candidate_id": "candidate_5",
+            "recovery_candidates": [],
+            "completed": True,
+        }
+
+        with patch(
+            "app.graph.nodes.run_search_agent.run_search_first_agent",
+            return_value={
+                "selected_output": "/tmp/new.png",
+                "candidate_outputs": ["/tmp/new.png"],
+                "execution_trace": [],
+                "final_execution_trace": [],
+                "segmentation_trace": [],
+                "fallback_trace": [],
+                "rounds": [continuation_round],
+                "selected_candidate_id": "candidate_5",
+                "edit_plan": {
+                    "mode": "auto",
+                    "domain": "general",
+                    "executor": "deterministic",
+                    "preserve": [],
+                    "operations": [],
+                    "should_write_memory": False,
+                    "memory_candidates": [],
+                    "needs_confirmation": False,
+                },
+                "mask_catalog": {"items": {}},
+            },
+        ) as mocked_run:
+            result = run_search_agent(
+                {
+                    "mode": "auto",
+                    "human_review_continuation": True,
+                    "input_images": ["/tmp/input.png"],
+                    "selected_output": "/tmp/current.png",
+                    "objective_card": _objective("global_tone").model_dump(mode="json"),
+                    "rounds": [
+                        {"id": "round_1", "index": 1, "focus": "subject_separation", "completed": True},
+                        {"id": "round_2", "index": 2, "focus": "subject_cleanup", "completed": True},
+                        {"id": "round_3", "index": 3, "focus": "global_tone", "completed": True},
+                        {"id": "round_4", "index": 4, "focus": "finish", "completed": True},
+                    ],
+                }
+            )
+
+        self.assertEqual(mocked_run.call_args.kwargs["round_index_offset"], 4)
+        self.assertEqual(mocked_run.call_args.kwargs["max_rounds"], 6)
+        self.assertEqual(mocked_run.call_args.kwargs["min_rounds"], 4)
+        self.assertEqual(result["rounds"][-1].id, "round_5_global_tone")
+        self.assertFalse(result["human_review_continuation"])
+        self.assertIsNone(result["approval_payload"])
+        self.assertEqual(result["search_cycle_round_offset"], 4)
+
+
+class RoundGuidanceModelTest(unittest.TestCase):
+    """Verify the per-round guidance model contract."""
+
+    def test_payload_is_current_round_only(self) -> None:
+        payload = build_round_guidance_payload(
+            objective=_objective("global_tone"),
+            focus="global_tone",
+            round_gaps=_objective("global_tone").gaps,
+            tool_catalog=[{"name": "adjust_exposure", "description": "曝光", "supported_regions": ["whole_image"], "params_schema": {}}],
+            candidate_count=3,
+            max_steps=2,
+        )
+
+        self.assertIn("当前round", payload)
+        self.assertNotIn("previous_rounds", payload)
+        self.assertNotIn("execution_trace", payload)
+        self.assertNotIn("selected_candidate_history", payload)
+
+    def test_generate_round_guidance_normalizes_invalid_tool_to_noop(self) -> None:
+        with (
+            patch("app.services.search_agent.round_guidance_model.model_available", return_value=True),
+            patch(
+                "app.services.search_agent.round_guidance_model.invoke_json",
+                return_value={
+                    "target_prompt": "提亮面部但保留高反差",
+                    "visual_diagnosis": "当前脸部偏暗",
+                    "preserve": ["逆光发丝"],
+                    "avoid": ["背景抬灰"],
+                    "candidates": [
+                        {"label": "非法工具", "summary": "不应执行", "steps": [{"op": "not_a_tool", "params": {}}]},
+                        {"label": "有效工具", "summary": "可以执行", "steps": [{"op": "adjust_exposure", "params": {"strength": 0.2}}]},
+                    ],
+                },
+            ) as invoke_mock,
+        ):
+            guidance = generate_round_guidance(
+                current_image_path="/tmp/current.png",
+                objective=_objective("global_tone"),
+                focus="global_tone",
+                round_gaps=_objective("global_tone").gaps,
+                tool_catalog=[{"name": "adjust_exposure", "description": "曝光", "supported_regions": ["whole_image"], "params_schema": {}}],
+                candidate_count=3,
+                max_steps=2,
+            )
+
+        self.assertEqual(invoke_mock.call_args.kwargs["image_paths"], ["/tmp/current.png"])
+        self.assertEqual(len(guidance.candidate_programs), 3)
+        self.assertEqual(guidance.candidate_programs[0].source, "noop")
+        self.assertEqual(guidance.candidate_programs[1].source, "model")
+        self.assertEqual(guidance.candidate_programs[1].steps[0].op, "adjust_exposure")
 
 
 if __name__ == "__main__":

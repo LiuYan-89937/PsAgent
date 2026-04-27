@@ -1,6 +1,7 @@
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'review_required'
 export type FocusKey = 'global_tone' | 'subject_separation' | 'subject_cleanup' | 'finish'
 export type RoundAction = 'keep' | 'recover_same_round' | 'stop_round'
+export type SearchEffort = 'standard' | 'high' | 'ultra'
 
 export interface AssetResponse {
   asset_id: string
@@ -21,6 +22,7 @@ export interface EditRequest {
   instruction?: string | null
   auto_mode?: boolean
   planner_thinking_mode?: boolean
+  search_effort?: SearchEffort
   input_asset_ids?: string[]
   input_image_paths?: string[]
 }
@@ -156,10 +158,19 @@ export interface CandidateProgram {
   id: string
   label: string
   focus: FocusKey
-  source: 'model' | 'rule' | 'variant' | 'noop' | 'direct'
+  source: 'model' | 'rule' | 'variant' | 'noop' | 'direct' | 'recovery'
   summary: string
   steps: EditOperation[]
   is_recovery?: boolean
+}
+
+export interface RoundGuidance {
+  focus: FocusKey
+  target_prompt: string
+  visual_diagnosis: string
+  preserve: string[]
+  avoid: string[]
+  candidate_programs: CandidateProgram[]
 }
 
 export interface CandidatePreviewExecution {
@@ -222,6 +233,7 @@ export interface SearchRoundResponse {
   output_asset_id?: string | null
   output_asset?: AssetResponse | null
   objective_gaps: ObjectiveGap[]
+  guidance?: RoundGuidance | null
   candidates: SearchCandidateResponse[]
   selected_candidate_id?: string | null
   selected_full_execution?: CandidatePreviewExecution | null
@@ -362,6 +374,7 @@ export interface ResumeReviewRequest {
   job_id: string
   approved: boolean
   note?: string | null
+  search_effort?: SearchEffort | null
 }
 
 export interface ResumeReviewResponse {

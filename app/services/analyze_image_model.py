@@ -4,24 +4,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.qwen_model import DEFAULT_VISION_MODEL, call_qwen_for_json, qwen_model_available
+from app.services.model_runtime import DEFAULT_VISION_MODEL, invoke_json, model_available
 
 
 def analyze_image_model_available() -> bool:
     """Return whether the image-analysis model can be called."""
 
-    return qwen_model_available()
+    return model_available()
 
 
-def generate_image_analysis_with_qwen(
+def generate_image_analysis(
     *,
     image_path: str,
     request_text: str,
     basic_metrics: dict[str, Any],
 ) -> dict[str, Any]:
-    """Call a multimodal Qwen model and return structured image analysis."""
+    """Call a multimodal model and return structured image analysis."""
 
-    payload = call_qwen_for_json(
+    payload = invoke_json(
         prompt_name="analyze_image.txt",
         user_payload={
             "用户需求": request_text,
@@ -33,7 +33,7 @@ def generate_image_analysis_with_qwen(
                 "只返回 JSON",
             ],
         },
-        model_env_name="DASHSCOPE_VISION_MODEL",
+        model_env_name="OPENAI_VISION_MODEL",
         default_model=DEFAULT_VISION_MODEL,
         image_paths=[image_path],
         temperature=0.1,

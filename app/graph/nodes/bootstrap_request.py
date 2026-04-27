@@ -8,7 +8,7 @@ from app.graph.fallbacks import append_fallback_trace
 from app.graph.state import EditState
 from app.services.auto_instruction_model import (
     auto_instruction_model_available,
-    generate_auto_beautify_instruction_with_qwen,
+    generate_auto_beautify_instruction,
 )
 
 
@@ -57,7 +57,7 @@ def bootstrap_request(state: EditState) -> dict[str, object]:
             }
         )
         try:
-            resolved_request = generate_auto_beautify_instruction_with_qwen(image_path=image_path)
+            resolved_request = generate_auto_beautify_instruction(image_path=image_path)
             writer(
                 {
                     "event": "bootstrap_finished",

@@ -32,7 +32,7 @@ class BootstrapRequestNodeTest(unittest.TestCase):
         with (
             patch("app.graph.nodes.bootstrap_request.auto_instruction_model_available", return_value=True),
             patch(
-                "app.graph.nodes.bootstrap_request.generate_auto_beautify_instruction_with_qwen",
+                "app.graph.nodes.bootstrap_request.generate_auto_beautify_instruction",
                 return_value="把画面修得更通透明亮",
             ),
         ):
@@ -44,7 +44,7 @@ class BootstrapRequestNodeTest(unittest.TestCase):
         with (
             patch("app.graph.nodes.bootstrap_request.auto_instruction_model_available", return_value=True),
             patch(
-                "app.graph.nodes.bootstrap_request.generate_auto_beautify_instruction_with_qwen",
+                "app.graph.nodes.bootstrap_request.generate_auto_beautify_instruction",
                 side_effect=RuntimeError("empty content"),
             ),
         ):

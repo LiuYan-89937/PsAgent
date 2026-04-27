@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from app.services.critic_model import evaluate_edit_result_with_qwen
+from app.services.critic_model import evaluate_edit_result
 
 
 class CriticModelTest(unittest.TestCase):
@@ -13,7 +13,7 @@ class CriticModelTest(unittest.TestCase):
 
     def test_evaluate_edit_result_uses_compact_payload_sections(self) -> None:
         with patch(
-            "app.services.critic_model.call_qwen_for_json",
+            "app.services.critic_model.invoke_json",
             return_value={
                 "overall_ok": True,
                 "preserve_ok": True,
@@ -26,7 +26,7 @@ class CriticModelTest(unittest.TestCase):
                 "should_request_review": False,
             },
         ) as mocked_call:
-            evaluate_edit_result_with_qwen(
+            evaluate_edit_result(
                 original_image_path="/tmp/original.png",
                 edited_image_path="/tmp/edited.png",
                 request_text="自然一点",

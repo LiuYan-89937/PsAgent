@@ -17,6 +17,7 @@ from app.graph.state import (
     JobEvent,
     ObjectiveCard,
     RecoveryDecision,
+    RoundGuidance,
     RoundReview,
     SearchCandidateArtifact,
     SearchRoundArtifact,
@@ -25,6 +26,7 @@ from app.graph.state import (
 
 
 JobStatus = Literal["pending", "running", "completed", "failed", "review_required"]
+SearchEffort = Literal["standard", "high", "ultra"]
 
 
 class AssetResponse(BaseModel):
@@ -52,6 +54,7 @@ class EditRequest(BaseModel):
     instruction: str | None = None
     auto_mode: bool = False
     planner_thinking_mode: bool = False
+    search_effort: SearchEffort = "standard"
     input_asset_ids: list[str] = Field(default_factory=list)
     input_image_paths: list[str] = Field(default_factory=list)
 
@@ -146,6 +149,7 @@ class SearchRoundResponse(BaseModel):
     output_asset_id: str | None = None
     output_asset: AssetResponse | None = None
     objective_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    guidance: RoundGuidance | None = None
     candidates: list[SearchCandidateResponse] = Field(default_factory=list)
     selected_candidate_id: str | None = None
     selected_full_execution: CandidateExecutionResponse | None = None
@@ -221,6 +225,7 @@ class ResumeReviewRequest(BaseModel):
     job_id: str
     approved: bool
     note: str | None = None
+    search_effort: SearchEffort | None = None
 
 
 class ResumeReviewResponse(BaseModel):

@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from app.services.qwen_model import DEFAULT_VISION_MODEL, call_qwen_for_json, qwen_model_available
+from app.services.model_runtime import DEFAULT_VISION_MODEL, invoke_json, model_available
 
 
 def auto_instruction_model_available() -> bool:
     """Return whether the auto-instruction model can be called."""
 
-    return qwen_model_available()
+    return model_available()
 
 
-def generate_auto_beautify_instruction_with_qwen(*, image_path: str) -> str:
+def generate_auto_beautify_instruction(*, image_path: str) -> str:
     """Generate a concise beautify instruction from image content."""
 
-    payload = call_qwen_for_json(
+    payload = invoke_json(
         prompt_name="auto_beautify.txt",
         user_payload={
             "任务": "请根据图片内容生成一段明确、结果导向、适合直接执行的中文美化提示词。",
@@ -27,7 +27,7 @@ def generate_auto_beautify_instruction_with_qwen(*, image_path: str) -> str:
                 "只返回 JSON",
             ],
         },
-        model_env_name="DASHSCOPE_REQUEST_MODEL",
+        model_env_name="OPENAI_VISION_MODEL",
         default_model=DEFAULT_VISION_MODEL,
         image_paths=[image_path],
         temperature=0.2,

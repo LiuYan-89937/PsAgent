@@ -36,7 +36,7 @@ class AnalyzeImageNodeTest(unittest.TestCase):
         with (
             patch("app.graph.nodes.analyze_image.analyze_image_model_available", return_value=True),
             patch(
-                "app.graph.nodes.analyze_image.generate_image_analysis_with_qwen",
+                "app.graph.nodes.analyze_image.generate_image_analysis",
                 return_value={
                     "domain": "portrait",
                     "scene_tags": ["indoor"],

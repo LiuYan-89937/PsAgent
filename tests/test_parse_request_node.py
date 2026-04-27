@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.graph.nodes.parse_request import parse_request
 from app.graph.state import RequestGoal, RequestIntent
-from app.services.parse_request_model import generate_request_intent_with_qwen
+from app.services.parse_request_model import generate_request_intent
 
 
 class ParseRequestNodeTest(unittest.TestCase):
@@ -49,7 +49,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         with (
             patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=True),
             patch(
-                "app.graph.nodes.parse_request.generate_request_intent_with_qwen",
+                "app.graph.nodes.parse_request.generate_request_intent",
                 return_value=RequestIntent(
                     mode="auto",
                     requested_tools=[],
@@ -71,7 +71,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         with (
             patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=True),
             patch(
-                "app.graph.nodes.parse_request.generate_request_intent_with_qwen",
+                "app.graph.nodes.parse_request.generate_request_intent",
                 return_value=RequestIntent(
                     mode="auto",
                     requested_tools=[],
@@ -107,7 +107,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         with (
             patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=True),
             patch(
-                "app.graph.nodes.parse_request.generate_request_intent_with_qwen",
+                "app.graph.nodes.parse_request.generate_request_intent",
                 side_effect=ValidationError.from_exception_data(
                     "RequestIntent",
                     [
@@ -161,14 +161,14 @@ class ParseRequestNodeTest(unittest.TestCase):
 
     def test_parse_request_model_uses_compact_tool_catalog(self) -> None:
         with patch(
-            "app.services.parse_request_model.call_qwen_for_json",
+            "app.services.parse_request_model.invoke_json",
             return_value={
                 "mode": "explicit",
                 "requested_tools": [],
                 "constraints": [],
             },
         ) as mocked_call:
-            generate_request_intent_with_qwen(
+            generate_request_intent(
                 request_text="提亮一点",
                 tool_catalog=[
                     {

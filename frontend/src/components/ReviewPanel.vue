@@ -1,28 +1,45 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import type { JobDetailResponse } from '@/types/api'
+import { computed, ref, watch } from 'vue'
+import type { JobDetailResponse, SearchEffort } from '@/types/api'
 
 const props = defineProps<{
   jobId: string
   payload?: any
   message?: string
   jobDetail?: JobDetailResponse | null
+  searchEffort: SearchEffort
 }>()
 
 const emit = defineEmits<{
-  (e: 'resume', approved: boolean, note: string): void
+  (e: 'resume', approved: boolean, note: string, searchEffort: SearchEffort): void
+  (e: 'update:searchEffort', value: SearchEffort): void
 }>()
 
 const note = ref('')
+const selectedEffort = ref<SearchEffort>(props.searchEffort)
 const inputImage = computed(() => props.jobDetail?.input_assets?.[0]?.content_url || '')
 const outputImage = computed(() => props.jobDetail?.selected_output?.content_url || '')
+const effortOptions: { value: SearchEffort; label: string; range: string }[] = [
+  { value: 'standard', label: '标准', range: '4-6' },
+  { value: 'high', label: '高', range: '6-8' },
+  { value: 'ultra', label: '超高', range: '8-12' },
+]
+
+watch(() => props.searchEffort, (value) => {
+  selectedEffort.value = value
+})
+
+function selectEffort(value: SearchEffort) {
+  selectedEffort.value = value
+  emit('update:searchEffort', value)
+}
 
 function handleApprove() {
-  emit('resume', true, note.value)
+  emit('resume', true, note.value, selectedEffort.value)
 }
 
 function handleReject() {
-  emit('resume', false, note.value)
+  emit('resume', false, note.value, selectedEffort.value)
 }
 </script>
 
@@ -72,6 +89,23 @@ function handleReject() {
         placeholder="看过当前效果后，可以在这里输入下一步调整提示，例如：主体再亮一点，背景压暗一些。"
         rows="3"
       ></textarea>
+    </div>
+
+    <div class="effort-row">
+      <span class="effort-label">搜索强度</span>
+      <div class="effort-control">
+        <button
+          v-for="option in effortOptions"
+          :key="option.value"
+          type="button"
+          class="effort-option"
+          :class="{ active: option.value === selectedEffort }"
+          @click="selectEffort(option.value)"
+        >
+          <span>{{ option.label }}</span>
+          <small>{{ option.range }}轮</small>
+        </button>
+      </div>
     </div>
 
     <div class="actions">
@@ -157,6 +191,54 @@ h2 {
 
 .preview-badge.highlight {
   background: rgba(99, 102, 241, 0.85);
+}
+
+.effort-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px 0 24px;
+}
+
+.effort-label {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.effort-control {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+}
+
+.effort-option {
+  min-width: 84px;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.effort-option.active {
+  color: var(--text-inverse);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.effort-option small {
+  font-size: 0.72rem;
+  color: inherit;
+  opacity: 0.72;
 }
 
 .payload-box {

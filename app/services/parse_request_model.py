@@ -1,26 +1,26 @@
-"""Text-only request parsing service powered by Qwen."""
+"""Text-only request parsing service powered by an OpenAI-compatible model."""
 
 from __future__ import annotations
 
 from app.graph.state import RequestIntent
 from app.services.model_context import compact_tool_catalog_for_model
-from app.services.qwen_model import DEFAULT_TEXT_MODEL, call_qwen_for_json, qwen_model_available
+from app.services.model_runtime import DEFAULT_TEXT_MODEL, invoke_json, model_available
 
 
 def parse_request_model_available() -> bool:
     """Return whether the request-parser model can be called."""
 
-    return qwen_model_available()
+    return model_available()
 
 
-def generate_request_intent_with_qwen(
+def generate_request_intent(
     *,
     request_text: str,
     tool_catalog: list[dict],
 ) -> RequestIntent:
-    """Call Qwen to normalize the user's instruction into a request intent."""
+    """Normalize the user's instruction into a request intent."""
 
-    payload = call_qwen_for_json(
+    payload = invoke_json(
         prompt_name="parse_request.txt",
         user_payload={
             "用户需求": request_text,
@@ -33,7 +33,7 @@ def generate_request_intent_with_qwen(
                 "只返回 JSON",
             ],
         },
-        model_env_name="DASHSCOPE_REQUEST_MODEL",
+        model_env_name="OPENAI_TEXT_MODEL",
         default_model=DEFAULT_TEXT_MODEL,
         temperature=0.1,
     )

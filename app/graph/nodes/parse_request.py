@@ -10,7 +10,7 @@ from app.graph.fallbacks import append_fallback_trace
 from app.graph.state import EditState, RequestGoal, RequestIntent, RequestToolHint, ToolCatalogItem
 from app.tools import PARSE_REQUEST_KEYWORDS, WHOLE_IMAGE_ONLY_TOOL_NAMES
 from app.services.parse_request_model import (
-    generate_request_intent_with_qwen,
+    generate_request_intent,
     parse_request_model_available,
 )
 
@@ -330,7 +330,7 @@ def parse_request(state: EditState) -> dict:
 
     if parse_request_model_available() and request_text:
         try:
-            validated_intent = generate_request_intent_with_qwen(
+            validated_intent = generate_request_intent(
                 request_text=request_text,
                 tool_catalog=tool_catalog,
             )

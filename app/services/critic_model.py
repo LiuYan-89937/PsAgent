@@ -9,16 +9,16 @@ from app.services.model_context import (
     compact_image_analysis_for_model,
     compact_plan_for_model,
 )
-from app.services.qwen_model import DEFAULT_CRITIC_MODEL, call_qwen_for_json, qwen_model_available
+from app.services.model_runtime import DEFAULT_CRITIC_MODEL, invoke_json, model_available
 
 
 def critic_model_available() -> bool:
     """Return whether the critic model can be called."""
 
-    return qwen_model_available()
+    return model_available()
 
 
-def evaluate_edit_result_with_qwen(
+def evaluate_edit_result(
     *,
     original_image_path: str,
     edited_image_path: str,
@@ -27,9 +27,9 @@ def evaluate_edit_result_with_qwen(
     image_analysis: dict[str, Any],
     execution_trace: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Call a multimodal Qwen critic and return a structured evaluation."""
+    """Call a multimodal critic and return a structured evaluation."""
 
-    payload = call_qwen_for_json(
+    payload = invoke_json(
         prompt_name="critic.txt",
         user_payload={
             "用户需求": request_text,
@@ -43,7 +43,7 @@ def evaluate_edit_result_with_qwen(
                 "只返回 JSON",
             ],
         },
-        model_env_name="DASHSCOPE_CRITIC_MODEL",
+        model_env_name="OPENAI_CRITIC_MODEL",
         default_model=DEFAULT_CRITIC_MODEL,
         image_paths=[original_image_path, edited_image_path],
         temperature=0.1,

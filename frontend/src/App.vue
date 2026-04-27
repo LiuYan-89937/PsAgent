@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount, watch } from 'vue'
 import { streamEdit, streamJobEvents, getJob, resumeReview } from '@/lib/api'
-import type { AssetResponse, SseEventPayload, JobDetailResponse } from '@/types/api'
+import type { AssetResponse, SseEventPayload, JobDetailResponse, SearchEffort } from '@/types/api'
 
 import ImageUploader from '@/components/ImageUploader.vue'
 import PromptInput from '@/components/PromptInput.vue'
@@ -40,6 +40,17 @@ const traceEnabled = ref(loadBoolSetting('psagent.trace.enabled', false))
 const debugEnabled = ref(loadBoolSetting('psagent.debug.enabled', false))
 const plannerThinkingEnabled = ref(loadBoolSetting('psagent.planner.thinking.enabled', false))
 
+function loadSearchEffort(): SearchEffort {
+  try {
+    const raw = window.localStorage.getItem('psagent.search.effort')
+    return raw === 'high' || raw === 'ultra' ? raw : 'standard'
+  } catch {
+    return 'standard'
+  }
+}
+
+const searchEffort = ref<SearchEffort>(loadSearchEffort())
+
 watch(traceEnabled, (value) => {
   try {
     window.localStorage.setItem('psagent.trace.enabled', String(value))
@@ -59,6 +70,14 @@ watch(debugEnabled, (value) => {
 watch(plannerThinkingEnabled, (value) => {
   try {
     window.localStorage.setItem('psagent.planner.thinking.enabled', String(value))
+  } catch {
+    // ignore
+  }
+})
+
+watch(searchEffort, (value) => {
+  try {
+    window.localStorage.setItem('psagent.search.effort', value)
   } catch {
     // ignore
   }
@@ -109,7 +128,7 @@ function handleCancelUpload() {
   currentState.value = 'idle'
 }
 
-async function handleStartEdit(instruction?: string | null, autoMode = false) {
+async function handleStartEdit(instruction?: string | null, autoMode = false, effort: SearchEffort = searchEffort.value) {
   if (!currentAsset.value) return
 
   clearPollTimer()
@@ -127,6 +146,7 @@ async function handleStartEdit(instruction?: string | null, autoMode = false) {
     instruction: instruction?.trim() || undefined,
     auto_mode: autoMode,
     planner_thinking_mode: plannerThinkingEnabled.value,
+    search_effort: effort,
     input_asset_ids: [currentAsset.value.asset_id]
   }
 
@@ -175,8 +195,8 @@ async function handleStartEdit(instruction?: string | null, autoMode = false) {
   }
 }
 
-async function handleAutoBeautify() {
-  await handleStartEdit(undefined, true)
+async function handleAutoBeautify(effort: SearchEffort = searchEffort.value) {
+  await handleStartEdit(undefined, true, effort)
 }
 
 async function fetchJobDetailAndComplete() {
@@ -193,7 +213,7 @@ async function fetchJobDetailAndComplete() {
   }
 }
 
-async function handleResumeReview(approved: boolean, note: string) {
+async function handleResumeReview(approved: boolean, note: string, effort: SearchEffort) {
   if (!currentJobId.value) return
 
   clearPollTimer()
@@ -203,7 +223,8 @@ async function handleResumeReview(approved: boolean, note: string) {
     await resumeReview({
       job_id: currentJobId.value,
       approved,
-      note
+      note,
+      search_effort: effort
     })
     const jobId = currentJobId.value
     void streamJobEvents(jobId, (eventName, data) => {
@@ -334,7 +355,9 @@ onBeforeUnmount(() => {
         <div class="view-container" v-else-if="currentState === 'ready' && currentAsset" key="ready">
           <PromptInput 
             :asset="currentAsset"
-            @submit="handleStartEdit"
+            :search-effort="searchEffort"
+            @update:search-effort="searchEffort = $event"
+            @submit="(instruction, effort) => handleStartEdit(instruction, false, effort)"
             @auto-beautify="handleAutoBeautify"
             @cancel="handleCancelUpload"
           />
@@ -356,6 +379,8 @@ onBeforeUnmount(() => {
             :payload="reviewPayload"
             :message="reviewMessage"
             :job-detail="jobDetail"
+            :search-effort="searchEffort"
+            @update:search-effort="searchEffort = $event"
             @resume="handleResumeReview"
           />
         </div>

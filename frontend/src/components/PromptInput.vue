@@ -1,23 +1,30 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { AssetResponse } from '@/types/api'
+import type { AssetResponse, SearchEffort } from '@/types/api'
 
 const props = defineProps<{
   asset: AssetResponse
+  searchEffort: SearchEffort
 }>()
 
 const emit = defineEmits<{
-  (e: 'submit', instruction: string): void
-  (e: 'auto-beautify'): void
+  (e: 'submit', instruction: string, searchEffort: SearchEffort): void
+  (e: 'auto-beautify', searchEffort: SearchEffort): void
+  (e: 'update:searchEffort', value: SearchEffort): void
   (e: 'cancel'): void
 }>()
 
 const instruction = ref('')
 const isFocus = ref(false)
+const effortOptions: { value: SearchEffort; label: string; range: string }[] = [
+  { value: 'standard', label: '标准', range: '4-6' },
+  { value: 'high', label: '高', range: '6-8' },
+  { value: 'ultra', label: '超高', range: '8-12' },
+]
 
 function handleSubmit() {
   if (!instruction.value.trim()) return
-  emit('submit', instruction.value.trim())
+  emit('submit', instruction.value.trim(), props.searchEffort)
 }
 </script>
 
@@ -39,6 +46,23 @@ function handleSubmit() {
       </button>
     </div>
 
+    <div class="effort-row">
+      <span class="effort-label">搜索强度</span>
+      <div class="effort-control">
+        <button
+          v-for="option in effortOptions"
+          :key="option.value"
+          type="button"
+          class="effort-option"
+          :class="{ active: option.value === searchEffort }"
+          @click="emit('update:searchEffort', option.value)"
+        >
+          <span>{{ option.label }}</span>
+          <small>{{ option.range }}轮</small>
+        </button>
+      </div>
+    </div>
+
     <div class="input-area" :class="{ 'is-focus': isFocus }">
       <textarea 
         v-model="instruction"
@@ -52,7 +76,7 @@ function handleSubmit() {
       <div class="action-bar">
         <span class="hint">按 Enter 键快速提交指令</span>
         <div class="action-buttons">
-          <button class="btn-secondary" @click="$emit('auto-beautify')">
+          <button class="btn-secondary" @click="emit('auto-beautify', searchEffort)">
             智能美化
           </button>
           <button 
@@ -117,6 +141,54 @@ function handleSubmit() {
   margin: 0;
   font-size: 0.85rem;
   color: var(--text-muted);
+}
+
+.effort-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.effort-label {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.effort-control {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+}
+
+.effort-option {
+  min-width: 84px;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.effort-option.active {
+  color: var(--text-inverse);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.effort-option small {
+  font-size: 0.72rem;
+  color: inherit;
+  opacity: 0.72;
 }
 
 .btn-cancel {

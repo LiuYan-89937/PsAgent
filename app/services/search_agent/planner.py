@@ -1,8 +1,11 @@
-"""Candidate generation for round-first search."""
+"""Candidate validation and direct execution helpers for round-first search."""
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
+
+from pydantic import ValidationError
 
 from app.graph.state import CandidateProgram, FocusKey, ObjectiveCard, PlannerExecutionStep, RequestIntent
 from app.tools import WHOLE_IMAGE_REGION
@@ -24,7 +27,7 @@ def _candidate(
     label: str,
     summary: str,
     steps: list[PlannerExecutionStep],
-    source: str = "variant",
+    source: str,
     is_recovery: bool = False,
 ) -> CandidateProgram:
     return CandidateProgram(
@@ -38,169 +41,126 @@ def _candidate(
     )
 
 
-def generate_candidates(*, objective: ObjectiveCard, focus: FocusKey, round_index: int) -> list[CandidateProgram]:
-    """Generate deterministic candidate programs for one auto round."""
+def build_stop_candidate(
+    *,
+    focus: FocusKey,
+    label: str = "停止当前轮",
+    summary: str = "本轮不追加工具调用，等待后续评估或人工复核。",
+    is_recovery: bool = False,
+) -> CandidateProgram:
+    """Build a bounded 0-step candidate used when model guidance asks to stop or fails."""
 
-    if focus == "global_tone":
-        candidates = [
-            _candidate(
-                focus=focus,
-                label="亮度优先",
-                summary="优先建立整体亮度和暗部可读性。",
-                steps=[
-                    _step("adjust_exposure", params={"strength": 0.24}, priority=0),
-                    _step("adjust_highlights_shadows", params={"shadow_amount": 0.18, "highlight_amount": 0.08, "midtone_contrast": 0.12}, priority=1),
-                ],
-            ),
-            _candidate(
-                focus=focus,
-                label="层次优先",
-                summary="优先整理黑白场和中间调对比。",
-                steps=[
-                    _step("adjust_highlights_shadows", params={"shadow_amount": 0.12, "highlight_amount": 0.14, "midtone_contrast": 0.14}, priority=0),
-                    _step("adjust_whites_blacks", params={"whites_amount": 0.08, "blacks_amount": -0.06}, priority=1),
-                ],
-            ),
-            _candidate(
-                focus=focus,
-                label="颜色干净度",
-                summary="轻推自然饱和并清理偏色。",
-                steps=[
-                    _step("adjust_vibrance_saturation", params={"strength": 0.18}, priority=0),
-                    _step("adjust_color_balance", params={"midtone_yellow_blue": 0.04, "preserve_luminosity": True}, priority=1),
-                ],
-            ),
-        ]
-    elif focus == "subject_separation":
-        candidates = [
-            _candidate(
-                focus=focus,
-                label="主体提亮",
-                summary="用人物遮罩提升主体可读性。",
-                steps=[
-                    _step(
-                        "adjust_exposure",
-                        region="person area",
-                        params={"strength": 0.22, "mask_provider": "fal_sam3", "mask_prompt": "person", "mask_semantic_type": True},
-                    )
-                ],
-            ),
-            _candidate(
-                focus=focus,
-                label="背景压住",
-                summary="轻压背景亮度，让主体更突出。",
-                steps=[
-                    _step(
-                        "adjust_brightness",
-                        region="background area",
-                        params={"brightness_offset": -0.12, "highlight_protection": 0.28, "mask_provider": "fal_sam3", "mask_prompt": "background", "mask_semantic_type": True},
-                    )
-                ],
-            ),
-            _candidate(
-                focus=focus,
-                label="局部停手",
-                summary="当前轮不做局部提交，避免错误遮罩污染结果。",
-                steps=[],
-                source="noop",
-            ),
-        ]
-    elif focus == "subject_cleanup":
-        candidates = [
-            _candidate(
-                focus=focus,
-                label="肤色提纯",
-                summary="轻量提亮肤色并清理脸部脏色。",
-                steps=[
-                    _step("adjust_skin_brightness", region="skin area", params={"brightness_shift": 0.1, "saturation_shift": -0.03, "mask_provider": "fal_sam3", "mask_prompt": "skin", "mask_semantic_type": True}),
-                    _step("adjust_face_color_cleanup", region="face area", params={"yellow_reduce": 0.1, "magenta_balance": 0.03, "mask_provider": "fal_sam3", "mask_prompt": "face", "mask_semantic_type": True}),
-                ],
-            ),
-            _candidate(
-                focus=focus,
-                label="质感整理",
-                summary="轻柔整理皮肤纹理，保留自然细节。",
-                steps=[
-                    _step("adjust_skin_smooth", region="skin area", params={"strength": 0.2, "smooth_strength": 0.22, "detail_protection": 0.72, "mask_provider": "fal_sam3", "mask_prompt": "skin", "mask_semantic_type": True}),
-                    _step("adjust_texture", region="skin area", params={"amount": -0.08, "mask_provider": "fal_sam3", "mask_prompt": "skin", "mask_semantic_type": True}),
-                ],
-            ),
-            _candidate(
-                focus=focus,
-                label="发丝整理",
-                summary="改善发丝分离度和局部完成度。",
-                steps=[
-                    _step("adjust_hair_enhance", region="hair area", params={"texture_boost": 0.18, "highlight_control": 0.1, "mask_provider": "fal_sam3", "mask_prompt": "hair", "mask_semantic_type": True})
-                ],
-            ),
-        ]
-    else:
-        candidates = [
-            _candidate(
-                focus=focus,
-                label="自然收口",
-                summary="轻暗角把视线收回主体。",
-                steps=[_step("adjust_vignette", params={"amount": 0.12, "midpoint": 0.58, "roundness": 0.5, "feather": 0.82})],
-            ),
-            _candidate(
-                focus=focus,
-                label="颜色收口",
-                summary="轻量调整中性色，让结果更完整。",
-                steps=[_step("adjust_selective_color", params={"target_band": "neutrals", "cyan_shift": 0.02, "yellow_shift": -0.02, "black_shift": 0.02})],
-            ),
-            _candidate(
-                focus=focus,
-                label="停止当前轮",
-                summary="不再追加收尾工具，保留当前结果。",
-                steps=[],
-                source="noop",
-            ),
-        ]
-    return candidates[:CANDIDATE_COUNT]
+    return _candidate(
+        focus=focus,
+        label=label,
+        summary=summary,
+        steps=[],
+        source="noop",
+        is_recovery=is_recovery,
+    )
 
 
-def generate_recovery_candidates(*, focus: FocusKey, reason: str) -> list[CandidateProgram]:
-    """Generate bounded same-round recovery candidates."""
+def _coerce_text(value: Any, *, fallback: str, max_length: int = 80) -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = fallback
+    return text[:max_length]
 
-    if focus in {"subject_separation", "subject_cleanup"}:
-        candidates = [
-            _candidate(
+
+def _coerce_step(raw_step: Any, *, priority: int) -> PlannerExecutionStep | None:
+    if not isinstance(raw_step, dict):
+        return None
+    payload = {
+        "op": raw_step.get("op"),
+        "region": raw_step.get("region") or WHOLE_IMAGE_REGION,
+        "params": raw_step.get("params") if isinstance(raw_step.get("params"), dict) else {},
+        "constraints": raw_step.get("constraints") if isinstance(raw_step.get("constraints"), list) else [],
+        "priority": raw_step.get("priority", priority),
+    }
+    if raw_step.get("strength") is not None:
+        payload["strength"] = raw_step.get("strength")
+    try:
+        return PlannerExecutionStep.model_validate(payload)
+    except ValidationError:
+        return None
+
+
+def _coerce_candidate(
+    raw_candidate: Any,
+    *,
+    focus: FocusKey,
+    index: int,
+    max_steps: int,
+    is_recovery: bool,
+) -> CandidateProgram | None:
+    if isinstance(raw_candidate, CandidateProgram):
+        candidate = raw_candidate.model_copy(deep=True)
+        candidate.id = f"{focus}_{'recovery_' if is_recovery else ''}{uuid4().hex[:8]}"
+        candidate.focus = focus
+        candidate.is_recovery = is_recovery
+        candidate.steps = candidate.steps[:max_steps]
+        candidate.source = "noop" if not candidate.steps else "model"
+        return candidate
+    if not isinstance(raw_candidate, dict):
+        return None
+
+    raw_steps = raw_candidate.get("steps")
+    steps = [
+        step
+        for step in (
+            _coerce_step(raw_step, priority=step_index)
+            for step_index, raw_step in enumerate(raw_steps if isinstance(raw_steps, list) else [])
+        )
+        if step is not None
+    ][:max_steps]
+
+    label = _coerce_text(raw_candidate.get("label"), fallback=f"候选 {index + 1}")
+    summary = _coerce_text(raw_candidate.get("summary"), fallback="模型生成的候选工具链。", max_length=180)
+    return _candidate(
+        focus=focus,
+        label=label,
+        summary=summary,
+        steps=steps,
+        source="model" if steps else "noop",
+        is_recovery=is_recovery,
+    )
+
+
+def normalize_model_candidates(
+    raw_candidates: Any,
+    *,
+    focus: FocusKey,
+    candidate_count: int,
+    max_steps: int,
+    is_recovery: bool = False,
+) -> list[CandidateProgram]:
+    """Normalize model candidate payloads into safe CandidateProgram objects."""
+
+    candidates: list[CandidateProgram] = []
+    iterable = raw_candidates if isinstance(raw_candidates, list) else []
+    for index, raw_candidate in enumerate(iterable):
+        candidate = _coerce_candidate(
+            raw_candidate,
+            focus=focus,
+            index=index,
+            max_steps=max_steps,
+            is_recovery=is_recovery,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+        if len(candidates) >= candidate_count:
+            break
+
+    while len(candidates) < candidate_count:
+        candidates.append(
+            build_stop_candidate(
                 focus=focus,
-                label="回退为全图轻修",
-                summary=f"局部候选出现问题，改用全图轻量修正：{reason}",
-                steps=[_step("adjust_clarity", params={"amount": 0.08})],
-                source="recovery",
-                is_recovery=True,
-            ),
-            _candidate(
-                focus=focus,
-                label="当前轮停手",
-                summary="局部风险较高，本轮不继续补救。",
-                steps=[],
-                source="noop",
-                is_recovery=True,
-            ),
-        ]
-    else:
-        candidates = [
-            _candidate(
-                focus=focus,
-                label="保守补救",
-                summary=f"用保守色调修正补救：{reason}",
-                steps=[_step("adjust_highlights_shadows", params={"shadow_amount": 0.04, "highlight_amount": 0.02, "midtone_contrast": 0.04})],
-                source="recovery",
-                is_recovery=True,
-            ),
-            _candidate(
-                focus=focus,
-                label="当前轮停手",
-                summary="本轮已有足够收益，不继续补救。",
-                steps=[],
-                source="noop",
-                is_recovery=True,
-            ),
-        ]
-    return candidates[:RECOVERY_CANDIDATE_COUNT]
+                label="停止当前轮" if not is_recovery else "停止恢复",
+                summary="模型未提供足够可安全执行的候选，本候选保持当前结果。",
+                is_recovery=is_recovery,
+            )
+        )
+    return candidates
 
 
 def generate_direct_candidate(*, request_intent: RequestIntent | None, objective: ObjectiveCard) -> CandidateProgram:

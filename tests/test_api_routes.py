@@ -218,6 +218,10 @@ class FakeGraph:
             yield ("tasks", {"name": "human_review", "input": {}, "triggers": ("resume",)})
             yield ("updates", {"human_review": {"approval_required": False}})
             yield ("tasks", {"name": "human_review", "result": {"approval_required": False}, "error": None, "interrupts": []})
+            yield ("tasks", {"name": "run_search_agent", "input": {}, "triggers": ("human_review",)})
+            yield ("custom", {"event": "round_started", "round": "round_2", "focus": "global_tone", "message": "复核后追加搜索轮"})
+            yield ("custom", {"event": "round_completed", "round": "round_2", "focus": "global_tone", "message": "复核后搜索轮完成"})
+            yield ("tasks", {"name": "run_search_agent", "result": {"approval_required": False}, "error": None, "interrupts": []})
             return
 
         yield ("tasks", {"name": "analyze_image", "input": {"x": 1}, "triggers": ("start",)})
@@ -395,11 +399,13 @@ class ApiRoutesTest(unittest.TestCase):
                 "user_id": "u1",
                 "instruction": "提亮一点",
                 "planner_thinking_mode": True,
+                "search_effort": "high",
                 "input_asset_ids": [asset_id],
             },
         )
         self.assertEqual(edit.status_code, 200)
         self.assertTrue(self.fake_graph.last_payload["planner_thinking_mode"])
+        self.assertEqual(self.fake_graph.last_payload["search_effort"], "high")
 
         with self.client.stream(
             "POST",
@@ -408,6 +414,7 @@ class ApiRoutesTest(unittest.TestCase):
                 "user_id": "u1",
                 "instruction": "提亮一点",
                 "planner_thinking_mode": True,
+                "search_effort": "ultra",
                 "input_asset_ids": [asset_id],
             },
         ) as response:
@@ -415,6 +422,7 @@ class ApiRoutesTest(unittest.TestCase):
             _ = "".join(response.iter_text())
 
         self.assertTrue(self.fake_graph.last_payload["planner_thinking_mode"])
+        self.assertEqual(self.fake_graph.last_payload["search_effort"], "ultra")
 
     def test_upload_rejects_invalid_image(self) -> None:
         upload = self.client.post(
@@ -476,6 +484,9 @@ class ApiRoutesTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["implemented"])
+        events = [event.event for event in self.job_store.require(job.job_id).events]
+        self.assertIn("round_started", events)
+        self.assertIn("round_completed", events)
 
 
 if __name__ == "__main__":
