@@ -25,21 +25,21 @@ def adjust_exposure(
     strength: Annotated[
         float,
         Field(
-            default=0.5,
+            default=0.28,
             ge=0.0,
             le=1.0,
             description="Primary exposure push strength. 0.2=light visible, 0.5=obvious, 0.8=strong.",
         ),
-    ] = 0.5,
+    ] = 0.28,
     max_stops: Annotated[
         float,
         Field(
-            default=2.0,
+            default=1.4,
             ge=0.5,
             le=3.0,
             description="Maximum stop range used to map the primary strength into exposure gain.",
         ),
-    ] = 2.0,
+    ] = 1.4,
     feather_radius: Annotated[
         float,
         Field(
@@ -99,8 +99,8 @@ ADJUST_EXPOSURE_SPEC = ToolSpec(
     supports_mask=True,
     supports_whole_image=True,
     default_params={
-        "strength": 0.5,
-        "max_stops": 2.0,
+        "strength": 0.28,
+        "max_stops": 1.4,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

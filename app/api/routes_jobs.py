@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_asset_store, get_job_store
@@ -212,6 +212,7 @@ async def get_job(
 @router.get("/{job_id}/events/stream")
 async def stream_job_events(
     job_id: str,
+    wait_for_resume: bool = Query(default=False),
     job_store: JobStore = Depends(get_job_store),
 ) -> StreamingResponse:
     """Stream persisted job events so the frontend can reconnect after review/resume."""
@@ -229,6 +230,11 @@ async def stream_job_events(
                 event = events[sent]
                 sent += 1
                 yield format_sse(event.event, event)
+
+            if record.status == "review_required" and wait_for_resume and idle_ticks < 8:
+                idle_ticks += 1
+                time.sleep(0.25)
+                continue
 
             if record.status in {"completed", "failed", "review_required"}:
                 terminal = make_event(

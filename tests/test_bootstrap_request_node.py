@@ -23,10 +23,20 @@ class BootstrapRequestNodeTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
 
-    def test_bootstrap_keeps_explicit_request_text(self) -> None:
-        result = bootstrap_request({"mode": "explicit", "request_text": "提亮一点", "input_images": [self.image_path]})
+    def test_bootstrap_keeps_custom_request_text(self) -> None:
+        result = bootstrap_request({"mode": "auto", "request_text": "提亮一点", "input_images": [self.image_path]})
 
         self.assertEqual(result["request_text"], "提亮一点")
+
+    def test_bootstrap_keeps_custom_auto_request_text(self) -> None:
+        with (
+            patch("app.graph.nodes.bootstrap_request.auto_instruction_model_available", return_value=True),
+            patch("app.graph.nodes.bootstrap_request.generate_auto_beautify_instruction") as mocked_generate,
+        ):
+            result = bootstrap_request({"mode": "auto", "request_text": "夏日胶片风格", "input_images": [self.image_path]})
+
+        self.assertEqual(result["request_text"], "夏日胶片风格")
+        mocked_generate.assert_not_called()
 
     def test_bootstrap_generates_auto_instruction(self) -> None:
         with (

@@ -16,11 +16,11 @@ def adjust_highlights_shadows(
     image_path: Annotated[str, Field(description="Runtime image path.")],
     shadow_amount: Annotated[float, Field(default=0.0, ge=-1.0, le=1.0, description="Shadow lift/compress amount.")] = 0.0,
     highlight_amount: Annotated[float, Field(default=0.0, ge=-1.0, le=1.0, description="Highlight recovery/boost amount.")] = 0.0,
-    midtone_contrast: Annotated[float, Field(default=0.12, ge=0.0, le=0.5, description="Midtone contrast recovery.")] = 0.12,
+    midtone_contrast: Annotated[float, Field(default=0.08, ge=0.0, le=0.5, description="Midtone contrast recovery.")] = 0.08,
     local_radius: Annotated[float, Field(default=36.0, ge=4.0, le=160.0, description="Local illumination estimation radius.")] = 36.0,
     shadow_tonal_width: Annotated[float, Field(default=0.45, ge=0.1, le=0.8, description="Shadow tonal width.")] = 0.45,
     highlight_tonal_width: Annotated[float, Field(default=0.45, ge=0.1, le=0.8, description="Highlight tonal width.")] = 0.45,
-    detail_amount: Annotated[float, Field(default=0.3, ge=0.0, le=1.0, description="Detail recovery amount.")] = 0.3,
+    detail_amount: Annotated[float, Field(default=0.18, ge=0.0, le=1.0, description="Detail recovery amount.")] = 0.18,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0, description="Mask feather radius.")] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -69,11 +69,11 @@ ADJUST_HIGHLIGHTS_SHADOWS_SPEC = ToolSpec(
     default_params={
         "shadow_amount": 0.0,
         "highlight_amount": 0.0,
-        "midtone_contrast": 0.12,
+        "midtone_contrast": 0.08,
         "local_radius": 36.0,
         "shadow_tonal_width": 0.45,
         "highlight_tonal_width": 0.45,
-        "detail_amount": 0.3,
+        "detail_amount": 0.18,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

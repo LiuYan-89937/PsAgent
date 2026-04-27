@@ -109,8 +109,10 @@ export function resumeReview(payload: ResumeReviewRequest): Promise<ResumeReview
 export async function streamJobEvents(
   jobId: string,
   onEvent: (eventName: string, data: SseEventPayload) => void,
+  options?: { waitForResume?: boolean },
 ): Promise<void> {
-  const response = await fetch(`${apiBaseUrl}/jobs/${jobId}/events/stream`)
+  const suffix = options?.waitForResume ? '?wait_for_resume=true' : ''
+  const response = await fetch(`${apiBaseUrl}/jobs/${jobId}/events/stream${suffix}`)
 
   if (!response.ok || !response.body) {
     throw await buildHttpError(response)

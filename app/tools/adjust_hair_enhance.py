@@ -14,9 +14,9 @@ from app.tools.image_ops import apply_regional_enhancement
 @tool
 def adjust_hair_enhance(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    texture_boost: Annotated[float, Field(default=0.3, ge=0.0, le=1.0)] = 0.3,
-    clarity_boost: Annotated[float, Field(default=0.2, ge=0.0, le=1.0)] = 0.2,
-    highlight_control: Annotated[float, Field(default=0.2, ge=0.0, le=1.0)] = 0.2,
+    texture_boost: Annotated[float, Field(default=0.22, ge=0.0, le=1.0)] = 0.22,
+    clarity_boost: Annotated[float, Field(default=0.16, ge=0.0, le=1.0)] = 0.16,
+    highlight_control: Annotated[float, Field(default=0.38, ge=0.0, le=1.0)] = 0.38,
     saturation_balance: Annotated[float, Field(default=0.0, ge=-1.0, le=1.0)] = 0.0,
     feather_radius: Annotated[float, Field(default=14.0, ge=0.0, le=64.0)] = 14.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
@@ -66,9 +66,9 @@ ADJUST_HAIR_ENHANCE_SPEC = ToolSpec(
     supports_whole_image=False,
     recommended_mask_prompt="hair",
     default_params={
-        "texture_boost": 0.3,
-        "clarity_boost": 0.2,
-        "highlight_control": 0.2,
+        "texture_boost": 0.22,
+        "clarity_boost": 0.16,
+        "highlight_control": 0.38,
         "saturation_balance": 0.0,
         "feather_radius": 14.0,
     },

@@ -47,11 +47,11 @@ class NativeToolRegistryTest(unittest.TestCase):
         self.assertEqual(color_lookup["family"], "color")
         self.assertEqual(color_lookup["mask_policy"], "optional")
 
-        teeth = next(item for item in catalog if item["name"] == "adjust_teeth_whiten")
-        self.assertTrue(teeth["requires_mask"])
-        self.assertEqual(teeth["mask_policy"], "required")
-        self.assertEqual(teeth["recommended_mask_prompt"], "teeth")
-        self.assertTrue(teeth["description"].startswith("Use this tool when"))
+        face_cleanup = next(item for item in catalog if item["name"] == "adjust_face_color_cleanup")
+        self.assertTrue(face_cleanup["requires_mask"])
+        self.assertEqual(face_cleanup["mask_policy"], "required")
+        self.assertEqual(face_cleanup["recommended_mask_prompt"], "face")
+        self.assertTrue(face_cleanup["description"].startswith("Use this tool when"))
 
     def test_every_registered_tool_is_exported_once(self) -> None:
         tool_names = {spec.name for spec in TOOL_SPECS}

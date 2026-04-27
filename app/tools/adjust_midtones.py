@@ -16,8 +16,8 @@ def adjust_midtones(
     image_path: Annotated[str, Field(description="Runtime image path.")],
     midtone_shift: Annotated[float, Field(default=0.0, ge=-0.4, le=0.4, description="Midtone lift/compress amount.")] = 0.0,
     midtone_width: Annotated[float, Field(default=0.4, ge=0.2, le=1.0, description="Midtone band width.")] = 0.4,
-    preserve_shadows: Annotated[float, Field(default=0.2, ge=0.0, le=0.85, description="Shadow protection.")] = 0.2,
-    preserve_highlights: Annotated[float, Field(default=0.2, ge=0.0, le=0.85, description="Highlight protection.")] = 0.2,
+    preserve_shadows: Annotated[float, Field(default=0.34, ge=0.0, le=0.85, description="Shadow protection.")] = 0.34,
+    preserve_highlights: Annotated[float, Field(default=0.34, ge=0.0, le=0.85, description="Highlight protection.")] = 0.34,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0, description="Mask feather radius.")] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -60,8 +60,8 @@ ADJUST_MIDTONES_SPEC = ToolSpec(
     default_params={
         "midtone_shift": 0.0,
         "midtone_width": 0.4,
-        "preserve_shadows": 0.2,
-        "preserve_highlights": 0.2,
+        "preserve_shadows": 0.34,
+        "preserve_highlights": 0.34,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

@@ -61,8 +61,10 @@ class FakeGraph:
             "issues": [],
             "warnings": [],
             "summary": "ok",
-            "should_continue_editing": False,
-            "should_request_review": False,
+            "decision": "accept",
+            "next_focus": None,
+            "correction_objective": "",
+            "decision_reason": "ok",
         }
 
     def _rounds(self, output_path: Path | str, mode: str, region: str) -> list[dict]:
@@ -110,15 +112,15 @@ class FakeGraph:
                 "candidates": [
                     {
                         "candidate_id": candidate_id,
-                        "label": "direct candidate" if mode != "auto" else "search candidate",
+                        "label": "search candidate",
                         "focus": "finish",
                         "selected": True,
                         "eliminated_reason": None,
                         "program": {
                             "id": candidate_id,
-                            "label": "direct candidate" if mode != "auto" else "search candidate",
+                            "label": "search candidate",
                             "focus": "finish",
-                            "source": "direct" if mode != "auto" else "rule",
+                            "source": "rule",
                             "summary": "轻微提亮。",
                             "steps": [step],
                             "is_recovery": False,
@@ -151,7 +153,7 @@ class FakeGraph:
         ]
 
     def _graph_state(self, payload: dict, output_path: Path | str, region: str) -> dict:
-        mode = payload.get("mode", "explicit")
+        mode = payload.get("mode", "auto")
         request_text = payload.get("request_text") or ("auto generated instruction" if mode == "auto" else None)
         trace = self._trace(output_path, region)
         rounds = self._rounds(output_path, mode, region)
@@ -178,6 +180,7 @@ class FakeGraph:
                 "goals": [
                     {
                         "kind": "tone",
+                        "focus": "global_tone",
                         "target_region": region,
                         "priority": 80,
                         "intensity": 0.2,
@@ -248,14 +251,16 @@ class FakeGraph:
             pass
 
         snapshot = Snapshot()
+        mode = "auto"
         request_text = None
         if isinstance(self.last_payload, dict):
+            mode = self.last_payload.get("mode", "auto")
             request_text = self.last_payload.get("request_text") or (
-                "auto generated instruction" if self.last_payload.get("mode") == "auto" else None
+                "auto generated instruction" if mode == "auto" else None
             )
         snapshot.values = self._graph_state(
             {
-                "mode": "explicit",
+                "mode": mode,
                 "request_text": request_text,
             },
             output_path,
@@ -310,10 +315,6 @@ class ApiRoutesTest(unittest.TestCase):
         tool_names = {item["name"] for item in catalog.json()["items"]}
         self.assertEqual(tool_names, {item["name"] for item in export_tool_catalog()})
 
-        legacy_catalog = self.client.get("/meta/packages")
-        self.assertEqual(legacy_catalog.status_code, 200)
-        self.assertTrue(legacy_catalog.json()["items"])
-
     def test_upload_edit_and_job_polling(self) -> None:
         upload = self.client.post(
             "/assets/upload",
@@ -336,6 +337,7 @@ class ApiRoutesTest(unittest.TestCase):
             },
         )
         self.assertEqual(edit.status_code, 200)
+        self.assertEqual(self.fake_graph.last_payload["mode"], "auto")
         payload = edit.json()
         self.assertEqual(payload["job"]["status"], "completed")
         self.assertIsNotNone(payload["selected_output"])
@@ -376,13 +378,13 @@ class ApiRoutesTest(unittest.TestCase):
             "/edit",
             json={
                 "user_id": "u1",
-                "auto_mode": True,
                 "input_asset_ids": [asset_id],
             },
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNotNone(self.fake_graph.last_payload)
+        self.assertEqual(self.fake_graph.last_payload["mode"], "auto")
         self.assertEqual(self.fake_graph.last_payload["request_text"], "")
         self.assertEqual(response.json()["job"]["request_text"], "auto generated instruction")
 
@@ -404,6 +406,7 @@ class ApiRoutesTest(unittest.TestCase):
             },
         )
         self.assertEqual(edit.status_code, 200)
+        self.assertEqual(self.fake_graph.last_payload["mode"], "auto")
         self.assertTrue(self.fake_graph.last_payload["planner_thinking_mode"])
         self.assertEqual(self.fake_graph.last_payload["search_effort"], "high")
 
@@ -422,6 +425,7 @@ class ApiRoutesTest(unittest.TestCase):
             _ = "".join(response.iter_text())
 
         self.assertTrue(self.fake_graph.last_payload["planner_thinking_mode"])
+        self.assertEqual(self.fake_graph.last_payload["mode"], "auto")
         self.assertEqual(self.fake_graph.last_payload["search_effort"], "ultra")
 
     def test_upload_rejects_invalid_image(self) -> None:

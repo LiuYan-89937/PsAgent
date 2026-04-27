@@ -14,9 +14,9 @@ from app.tools.image_ops import apply_dehaze_adjustment
 @tool
 def adjust_dehaze(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    amount: Annotated[float, Field(default=0.5, ge=-1.0, le=1.0)] = 0.5,
-    luminance_protection: Annotated[float, Field(default=0.26, ge=0.0, le=1.0)] = 0.26,
-    color_protection: Annotated[float, Field(default=0.3, ge=0.0, le=1.0)] = 0.3,
+    amount: Annotated[float, Field(default=0.24, ge=-1.0, le=1.0)] = 0.24,
+    luminance_protection: Annotated[float, Field(default=0.36, ge=0.0, le=1.0)] = 0.36,
+    color_protection: Annotated[float, Field(default=0.42, ge=0.0, le=1.0)] = 0.42,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -54,7 +54,7 @@ ADJUST_DEHAZE_SPEC = ToolSpec(
     focus_affinity=["global_tone", "subject_separation"],
     supports_mask=True,
     supports_whole_image=True,
-    default_params={"amount": 0.5, "luminance_protection": 0.26, "color_protection": 0.3, "feather_radius": 18.0},
+    default_params={"amount": 0.24, "luminance_protection": 0.36, "color_protection": 0.42, "feather_radius": 18.0},
     planner_schema=build_planner_schema(adjust_dehaze, supports_mask=True, mask_schema=MASK_PARAMS_SCHEMA, excluded_fields={"image_path", "mask_path"}),
     primary_param="amount",
     risk_level="low",

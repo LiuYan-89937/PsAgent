@@ -34,6 +34,31 @@ async def resume_review(
     if not record.approval_required:
         raise HTTPException(status_code=400, detail="Job is not waiting for review")
 
+    resume_message = "正在根据人工反馈继续搜索" if payload.approved else "正在结束人工复核流程"
+    job_store.set_status(
+        payload.job_id,
+        "running",
+        approval_required=False,
+        current_round="review_resume",
+        current_focus=None,
+        current_message=resume_message,
+    )
+    append_job_event(
+        job_store,
+        payload.job_id,
+        make_event(
+            "review_resume_started",
+            node="human_review",
+            round="review_resume",
+            message=resume_message,
+            payload={
+                "approved": payload.approved,
+                "note": payload.note,
+                "search_effort": payload.search_effort,
+            },
+        ),
+    )
+
     config = build_graph_config(record.thread_id)
     try:
         for _ in iter_graph_events(

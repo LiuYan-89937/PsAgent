@@ -52,7 +52,6 @@ class EditRequest(BaseModel):
     user_id: str
     thread_id: str | None = None
     instruction: str | None = None
-    auto_mode: bool = False
     planner_thinking_mode: bool = False
     search_effort: SearchEffort = "standard"
     input_asset_ids: list[str] = Field(default_factory=list)

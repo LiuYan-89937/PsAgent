@@ -1,4 +1,4 @@
-"""Parse user instruction and choose explicit or auto mode."""
+"""Parse user instruction into search-first request intent."""
 
 from __future__ import annotations
 
@@ -158,6 +158,7 @@ def _append_goal(
     goals: list[dict[str, Any]],
     *,
     kind: str,
+    focus: str,
     target_region: str,
     priority: int,
     intensity: float | None = None,
@@ -170,6 +171,7 @@ def _append_goal(
     goals.append(
         {
             "kind": kind,
+            "focus": focus,
             "target_region": target_region,
             "priority": priority,
             "intensity": intensity,
@@ -187,14 +189,23 @@ def _infer_goals(text: str) -> list[dict[str, Any]]:
     goals: list[dict[str, Any]] = []
 
     if not text:
-        _append_goal(goals, kind="auto_enhance", target_region="whole_image", priority=50, intensity=0.28)
+        _append_goal(
+            goals,
+            kind="auto_enhance",
+            focus="global_tone",
+            target_region="whole_image",
+            priority=50,
+            intensity=0.28,
+        )
         return goals
 
     if _contains_any(text, ("提亮", "偏暗", "变亮", "亮一点", "逆光", "背光")):
         target_region = region if region != "whole_image" else ("person area" if _contains_any(text, ("逆光", "背光")) else "whole_image")
+        focus = "subject_separation" if target_region != "whole_image" else "global_tone"
         _append_goal(
             goals,
             kind="lift_luminance",
+            focus=focus,
             target_region=target_region,
             priority=82,
             intensity=max(strength, 0.32),
@@ -204,6 +215,7 @@ def _infer_goals(text: str) -> list[dict[str, Any]]:
         _append_goal(
             goals,
             kind="recover_highlights",
+            focus="global_tone",
             target_region=region,
             priority=78,
             intensity=max(strength, 0.3),
@@ -213,6 +225,7 @@ def _infer_goals(text: str) -> list[dict[str, Any]]:
         _append_goal(
             goals,
             kind="improve_tonal_separation",
+            focus="global_tone",
             target_region=region,
             priority=68,
             intensity=strength,
@@ -222,6 +235,7 @@ def _infer_goals(text: str) -> list[dict[str, Any]]:
         _append_goal(
             goals,
             kind="balance_color",
+            focus="global_tone",
             target_region=region,
             priority=64,
             intensity=strength,
@@ -231,6 +245,7 @@ def _infer_goals(text: str) -> list[dict[str, Any]]:
         _append_goal(
             goals,
             kind="natural_skin_tone",
+            focus="subject_cleanup",
             target_region="face and skin area",
             priority=86,
             intensity=min(max(strength, 0.22), 0.45),
@@ -240,17 +255,19 @@ def _infer_goals(text: str) -> list[dict[str, Any]]:
         _append_goal(
             goals,
             kind="background_balance",
+            focus="subject_separation",
             target_region="background area",
             priority=58,
             intensity=strength,
             constraints=["do_not_affect_subject"],
         )
     if _contains_any(text, ("噪点", "降噪", "颗粒太多")):
-        _append_goal(goals, kind="reduce_noise", target_region=region, priority=70, intensity=strength)
+        _append_goal(goals, kind="reduce_noise", focus="finish", target_region=region, priority=70, intensity=strength)
     if _contains_any(text, ("清晰", "锐", "细节", "质感")):
         _append_goal(
             goals,
             kind="improve_detail",
+            focus="finish",
             target_region=region,
             priority=62,
             intensity=strength,
@@ -258,7 +275,14 @@ def _infer_goals(text: str) -> list[dict[str, Any]]:
         )
 
     if not goals:
-        _append_goal(goals, kind="auto_enhance", target_region="whole_image", priority=45, intensity=0.25)
+        _append_goal(
+            goals,
+            kind="auto_enhance",
+            focus="global_tone",
+            target_region="whole_image",
+            priority=45,
+            intensity=0.25,
+        )
     return goals
 
 
@@ -335,9 +359,11 @@ def parse_request(state: EditState) -> dict:
                 tool_catalog=tool_catalog,
             )
             validated_intent = _stabilize_request_intent(validated_intent, request_text)
+            if validated_intent.mode != "auto":
+                validated_intent = validated_intent.model_copy(update={"mode": "auto"})
             return {
                 "request_text": request_text,
-                "mode": state.get("mode", validated_intent.mode),
+                "mode": "auto",
                 "request_intent": validated_intent.model_dump(mode="json"),
             }
         except (RuntimeError, ValidationError) as error:
@@ -367,15 +393,13 @@ def parse_request(state: EditState) -> dict:
                 error=None,
             )
 
-    auto_markers = ("自动", "你看着修", "帮我修", "随便修", "auto")
     explicit_requests = _infer_requested_tools(request_text)
     goals = _infer_goals(request_text)
-    mode = "auto" if not request_text or any(marker in request_text for marker in auto_markers) else "explicit"
 
     constraints = _infer_constraints(request_text)
 
     validated_intent = RequestIntent(
-        mode=mode,
+        mode="auto",
         goals=[
             RequestGoal.model_validate(goal)
             for goal in goals
@@ -393,7 +417,7 @@ def parse_request(state: EditState) -> dict:
 
     return {
         "request_text": request_text,
-        "mode": state.get("mode", mode),
+        "mode": "auto",
         "request_intent": validated_intent.model_dump(mode="json"),
         "fallback_trace": fallback_trace,
     }

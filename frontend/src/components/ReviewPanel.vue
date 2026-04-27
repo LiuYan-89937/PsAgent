@@ -38,6 +38,10 @@ function handleApprove() {
   emit('resume', true, note.value, selectedEffort.value)
 }
 
+function handleAcceptCurrent() {
+  emit('resume', true, '确认', selectedEffort.value)
+}
+
 function handleReject() {
   emit('resume', false, note.value, selectedEffort.value)
 }
@@ -110,6 +114,7 @@ function handleReject() {
 
     <div class="actions">
       <button class="btn-secondary decline-btn" @click="handleReject">拒绝并中止</button>
+      <button class="btn-secondary accept-btn" @click="handleAcceptCurrent">确认当前效果</button>
       <button class="btn-primary" @click="handleApprove">按当前意见继续</button>
     </div>
   </div>
@@ -297,5 +302,11 @@ h2 {
   background: rgba(239, 68, 68, 0.1);
   color: var(--status-error);
   border-color: rgba(239, 68, 68, 0.3);
+}
+
+.accept-btn:hover {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--status-success);
+  border-color: rgba(34, 197, 94, 0.3);
 }
 </style>

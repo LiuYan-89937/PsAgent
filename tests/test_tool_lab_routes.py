@@ -133,8 +133,8 @@ class ToolLabRoutesTest(unittest.TestCase):
                 "input_asset_id": input_asset_id,
                 "steps": [
                     {
-                        "tool_name": "adjust_teeth_whiten",
-                        "params": {"yellow_reduce": 0.3},
+                        "tool_name": "adjust_skin_smooth",
+                        "params": {"smooth_strength": 0.3},
                     }
                 ],
             },

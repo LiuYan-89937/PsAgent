@@ -751,11 +751,6 @@ def generate_fal_sam3_mask(
             repository="cdn",
         )
 
-        semantic_mode = (
-            semantic_type
-            if semantic_type is not None
-            else _default_semantic_type_for_prompt("main_subject", cleaned_prompt)
-        )
         arguments: dict[str, Any] = {
             "image_url": upload_url,
             "prompt": cleaned_prompt,
@@ -764,17 +759,6 @@ def generate_fal_sam3_mask(
             "return_multiple_masks": False,
             "max_masks": 1,
         }
-        # Keep these fields computed for upstream metadata and compatibility even
-        # though SAM 3 image endpoint does not consume them directly.
-        _ = (
-            semantic_mode,
-            _as_bool(fill_holes, default=True),
-            _as_bool(blur_mask, default=False),
-            _as_bool(revert_mask, default=False),
-            int(expand_mask or 0),
-            None,
-            _as_bool(use_grounding_dino, default=False) if use_grounding_dino is not None else None,
-        )
 
         response = client.subscribe(
             model_name,
@@ -1134,7 +1118,7 @@ def ensure_region_mask(
 
     现阶段支持两种 provider：
     1. `aliyun`：面向稳定粗区域 `main_subject/person/background`
-    2. `fal_sam3`：面向文本引导语义区域，也兼容对稳定区域做更精细的替代分割
+    2. `fal_sam3`：面向文本引导语义区域，也可对稳定区域做更精细的替代分割
     """
 
     return resolve_region_mask(

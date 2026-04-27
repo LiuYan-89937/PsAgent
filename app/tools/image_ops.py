@@ -168,40 +168,52 @@ def apply_exposure_adjustment(
     mask_path: str | None = None,
     feather_radius: float = 0.0,
 ) -> str:
-    """Apply a simple exposure adjustment and save the result.
-
-    The implementation uses a multiplicative exposure model:
-    values above 1.0 brighten the image, values below 1.0 darken it.
-    When a mask is provided, only the masked area is blended with the
-    adjusted result. The mask can be feathered to create a softer local
-    transition, which is closer to how Photoshop adjustment masks feel.
-    """
+    """Apply a tone-aware exposure adjustment and save the result."""
 
     image = Image.open(image_path).convert("RGB")
-    # CV / 图像处理知识：
-    # 这里对每个像素通道做 point-wise transform（逐点变换）。
-    # 数学上可以写成：
-    #   I' = clip(I * multiplier, 0, 255)
-    # 其中 I 是输入像素值，I' 是输出像素值。
-    #
-    # 这类乘法模型更接近“曝光”或“增益”调整；
-    # 如果用 I' = I + beta，则更像简单亮度平移。
-    #
-    # clip 的作用是做饱和裁剪，避免像素越界。
-    adjusted = image.point(lambda value: max(0, min(255, int(round(value * multiplier)))))
+    image_np = np.asarray(image, dtype=np.uint8)
+    image_float = image_np.astype(np.float32) / 255.0
+    multiplier = float(np.clip(multiplier, 0.18, 8.0))
 
-    mask = _prepare_blend_mask(mask_path, image.size, feather_radius=feather_radius)
-    if mask:
-        # CV / 图像处理知识：
-        # 这里是最基础的区域混合（masked compositing）。
-        # mask 白色区域取 adjusted，黑色区域保留原图。
-        # 等价于：
-        #   result = mask * adjusted + (1 - mask) * image
-        # 只是 Pillow 在内部帮我们完成了归一化和混合。
-        result = Image.composite(adjusted, image, mask)
+    lab = _rgb_to_lab_float(image_float)
+    luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
+    exposure_stops = float(np.log2(multiplier))
+    strength = min(abs(exposure_stops) / 3.0, 1.0)
+
+    if exposure_stops >= 0.0:
+        tonal_gain = 2.0 ** (exposure_stops * 0.62)
+        raw_luminance = np.clip(luminance * tonal_gain, 0.0, 1.0)
+        highlight_guard = 1.0 - _highlights_mask(luminance, 0.28) * (0.62 + strength * 0.24)
+        deep_shadow_guard = 1.0 - _shadows_mask(luminance, 0.16) * 0.25
+        tonal_gate = np.clip(
+            _midtones_mask(luminance, 0.95) * 0.92 + _shadows_mask(luminance, 0.58) * 0.5,
+            0.0,
+            1.0,
+        )
+        tonal_gate *= np.clip(highlight_guard * deep_shadow_guard, 0.0, 1.0)
+        adjusted_luminance = luminance * (1.0 - tonal_gate) + raw_luminance * tonal_gate
+
+        local_base = cv2.GaussianBlur(luminance, (0, 0), sigmaX=1.15, sigmaY=1.15, borderType=cv2.BORDER_REPLICATE)
+        detail_layer = luminance - local_base
+        adjusted_luminance += detail_layer * min(strength * 0.06, 0.045) * tonal_gate
     else:
-        result = adjusted
+        tonal_gain = 2.0 ** (exposure_stops * 0.78)
+        raw_luminance = np.clip(luminance * tonal_gain, 0.0, 1.0)
+        shadow_guard = 1.0 - _shadows_mask(luminance, 0.22) * 0.72
+        tonal_gate = np.clip(
+            _midtones_mask(luminance, 0.86) * 0.78 + _highlights_mask(luminance, 0.48) * 0.55,
+            0.0,
+            1.0,
+        )
+        tonal_gate *= shadow_guard
+        adjusted_luminance = luminance * (1.0 - tonal_gate) + raw_luminance * tonal_gate
 
+    adjusted_lab = lab.copy()
+    adjusted_lab[:, :, 0] = np.clip(adjusted_luminance, 0.0, 1.0) * 100.0
+    adjusted_rgb = _lab_float_to_rgb(adjusted_lab)
+    mask_np = _prepare_blend_mask_np(mask_path, image.size, feather_radius=feather_radius)
+    result_np = _blend_rgb_result(adjusted_rgb, image_float, mask_np)
+    result = Image.fromarray(np.clip(result_np * 255.0, 0, 255).astype(np.uint8), mode="RGB")
     return _save_result_image(result, output_path)
 
 
@@ -365,15 +377,17 @@ def apply_highlights_shadows_adjustment(
     highlight_map = np.power(highlight_map, 1.7)
 
     adjusted_luminance = luminance.copy()
+    deep_shadow_anchor = np.power(np.clip((0.09 - luminance) / 0.09, 0.0, 1.0), 2.0)
     if shadow_amount >= 0:
-        adjusted_luminance += (1.0 - adjusted_luminance) * shadow_amount * shadow_map
+        shadow_lift_map = shadow_map * (1.0 - deep_shadow_anchor * 0.72)
+        adjusted_luminance += (1.0 - adjusted_luminance) * shadow_amount * 0.72 * shadow_lift_map
     else:
-        adjusted_luminance -= adjusted_luminance * abs(shadow_amount) * shadow_map
+        adjusted_luminance -= adjusted_luminance * abs(shadow_amount) * 0.82 * shadow_map
 
     if highlight_amount >= 0:
-        adjusted_luminance -= adjusted_luminance * highlight_amount * highlight_map
+        adjusted_luminance -= adjusted_luminance * highlight_amount * 0.78 * highlight_map
     else:
-        adjusted_luminance += (1.0 - adjusted_luminance) * abs(highlight_amount) * highlight_map
+        adjusted_luminance += (1.0 - adjusted_luminance) * abs(highlight_amount) * 0.68 * highlight_map
 
     # 细节回灌：
     # 先从原始亮度里提一个小半径 detail layer，再按调整强度轻微加回去。
@@ -387,11 +401,11 @@ def apply_highlights_shadows_adjustment(
     )
     detail_layer = luminance - detail_base
     affected_map = np.maximum(shadow_map, highlight_map)
-    adjusted_luminance += detail_layer * detail_amount * (0.25 + 0.75 * affected_map)
+    adjusted_luminance += detail_layer * detail_amount * 0.68 * (0.2 + 0.8 * affected_map)
 
     if midtone_contrast > 0:
         center_weight = 1.0 - np.clip(np.abs(adjusted_luminance - 0.5) / 0.5, 0.0, 1.0)
-        adjusted_luminance += (adjusted_luminance - 0.5) * midtone_contrast * center_weight
+        adjusted_luminance += (adjusted_luminance - 0.5) * midtone_contrast * 0.72 * center_weight
 
     adjusted_luminance = np.clip(adjusted_luminance, 0.0, 1.0)
 
@@ -816,9 +830,14 @@ def apply_midtones_adjustment(
     )
     adjusted = luminance.copy()
     if midtone_shift >= 0:
-        adjusted += (1.0 - adjusted) * midtone_shift * midtones * (1.0 - protection)
+        adjusted += (1.0 - adjusted) * midtone_shift * 0.72 * midtones * (1.0 - protection)
     else:
-        adjusted -= adjusted * abs(midtone_shift) * midtones * (1.0 - protection)
+        adjusted -= adjusted * abs(midtone_shift) * 0.78 * midtones * (1.0 - protection)
+
+    if abs(midtone_shift) > 0:
+        local_base = cv2.GaussianBlur(luminance, (0, 0), sigmaX=1.1, sigmaY=1.1, borderType=cv2.BORDER_REPLICATE)
+        detail_layer = luminance - local_base
+        adjusted += detail_layer * min(abs(midtone_shift) * 0.12, 0.04) * midtones * (1.0 - protection * 0.5)
 
     adjusted_lab = lab.copy()
     adjusted_lab[:, :, 0] = np.clip(adjusted, 0.0, 1.0) * 100.0
@@ -849,16 +868,22 @@ def apply_clarity_adjustment(
     lab = _rgb_to_lab_float(image_float)
     luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
 
-    sigma = 2.2 + radius_scale * 5.2
+    amount = float(np.clip(amount, -1.0, 1.0))
+    radius_scale = float(np.clip(radius_scale, 0.2, 3.0))
+    highlight_protection = float(np.clip(highlight_protection, 0.0, 0.85))
+    shadow_protection = float(np.clip(shadow_protection, 0.0, 0.85))
+
+    sigma = 2.4 + radius_scale * 5.4
     base = cv2.GaussianBlur(luminance, (0, 0), sigmaX=sigma, sigmaY=sigma, borderType=cv2.BORDER_REPLICATE)
     detail = luminance - base
+    detail_gate = np.clip((np.abs(detail) - 0.006) / 0.09, 0.0, 1.0)
 
     midtones = _midtones_mask(luminance, 0.82)
     highlights = _highlights_mask(luminance, max(0.14, highlight_protection + 0.18))
     shadows = _shadows_mask(luminance, max(0.14, shadow_protection + 0.18))
     protection = np.clip(highlights * highlight_protection + shadows * shadow_protection, 0.0, 0.92)
 
-    adjusted_luminance = luminance + detail * amount * 1.35 * midtones * (1.0 - protection)
+    adjusted_luminance = luminance + detail * amount * 0.86 * detail_gate * midtones * (1.0 - protection)
     adjusted_luminance = np.clip(adjusted_luminance, 0.0, 1.0)
 
     adjusted_lab = lab.copy()
@@ -950,7 +975,11 @@ def apply_texture_adjustment(
     lab = _rgb_to_lab_float(image_float)
     luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
 
-    sigma_small = 0.9 + detail_scale * 1.6
+    amount = float(np.clip(amount, -1.0, 1.0))
+    detail_scale = float(np.clip(detail_scale, 0.2, 3.0))
+    noise_protection = float(np.clip(noise_protection, 0.0, 1.0))
+
+    sigma_small = 1.0 + detail_scale * 1.7
     sigma_large = sigma_small * 2.2
     small_base = cv2.GaussianBlur(
         luminance,
@@ -972,7 +1001,7 @@ def apply_texture_adjustment(
     detail_gate = np.clip((detail_magnitude - noise_floor) / max(0.08 - noise_floor, 1e-6), 0.0, 1.0)
     midtones = _midtones_mask(luminance, 0.9)
 
-    adjusted_luminance = luminance + detail * amount * 1.55 * detail_gate * midtones
+    adjusted_luminance = luminance + detail * amount * 0.92 * detail_gate * midtones
     adjusted_luminance = np.clip(adjusted_luminance, 0.0, 1.0)
 
     adjusted_lab = lab.copy()
@@ -1016,12 +1045,12 @@ def apply_dehaze_adjustment(
         0.92,
     )
 
-    adjusted_luminance = luminance + amount * local_contrast * 2.1 * midtones * (1.0 - extreme_protection)
+    adjusted_luminance = luminance + amount * local_contrast * 1.35 * midtones * (1.0 - extreme_protection)
     adjusted_luminance = np.clip(adjusted_luminance, 0.0, 1.0)
 
     chroma = np.sqrt(a_channel * a_channel + b_channel * b_channel)
     chroma_safe = np.maximum(chroma, 1e-6)
-    chroma_gain = 1.0 + amount * 0.11 * (1.0 - np.clip(chroma / 96.0, 0.0, 1.0) * color_protection)
+    chroma_gain = 1.0 + amount * 0.07 * (1.0 - np.clip(chroma / 96.0, 0.0, 1.0) * color_protection)
 
     adjusted_lab = lab.copy()
     adjusted_lab[:, :, 0] = adjusted_luminance * 100.0
@@ -2066,7 +2095,7 @@ def apply_sharpen_adjustment(
     image_np = np.asarray(image, dtype=np.uint8)
     image_float = image_np.astype(np.float32) / 255.0
 
-    amount = float(np.clip(amount, 0.0, 2.4))
+    amount = float(np.clip(amount, 0.0, 1.6))
     radius = float(np.clip(radius, 0.4, 6.0))
     threshold = float(np.clip(threshold, 0.0, 0.2))
     highlight_protection = float(np.clip(highlight_protection, 0.0, 0.85))
@@ -2104,7 +2133,8 @@ def apply_sharpen_adjustment(
         1.5,
     )
 
-    sharpened_luminance = luminance + detail * amount * threshold_gate * highlight_gate
+    halo_guard = 1.0 - np.clip(np.abs(detail) / 0.22, 0.0, 1.0) * 0.38
+    sharpened_luminance = luminance + detail * amount * 0.58 * threshold_gate * highlight_gate * halo_guard
     sharpened_luminance = np.clip(sharpened_luminance, 0.0, 1.0)
 
     adjusted_lab = lab.copy()

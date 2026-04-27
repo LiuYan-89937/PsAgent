@@ -58,6 +58,24 @@ function percent(score?: number | null): string {
   return `${Math.round(normalized)}`
 }
 
+function candidateScore(candidate: SearchCandidateResponse): number | null {
+  const score = candidate.review?.score
+  return typeof score === 'number' && !Number.isNaN(score) ? score : null
+}
+
+function candidateScoreLabel(candidate: SearchCandidateResponse): string {
+  const score = candidateScore(candidate)
+  if (score === null) return '未评分'
+  return `${score.toFixed(2)} / 5`
+}
+
+function candidateScoreWidth(candidate: SearchCandidateResponse): string {
+  const score = candidateScore(candidate)
+  if (score === null) return '0%'
+  const ratio = Math.max(0, Math.min(5, score)) / 5
+  return `${Math.round(ratio * 100)}%`
+}
+
 function traceSummary(trace?: ExecutionTraceItem[] | null): string {
   const items = trace || []
   const ok = items.filter((item) => item.ok !== false).length
@@ -70,6 +88,19 @@ function candidateTone(candidate: SearchCandidateResponse): StatusTone {
   if (candidate.selected) return 'success'
   if (candidate.review?.recommended_action === 'recover_same_round') return 'warning'
   if (candidate.review?.overall_ok === false) return 'error'
+  return 'neutral'
+}
+
+function reviewDecisionLabel(decision?: string | null): string {
+  if (decision === 'continue_auto') return '继续自动'
+  if (decision === 'request_human_review') return '需复核'
+  return '完成'
+}
+
+function reviewDecisionTone(review: EvaluationReport): StatusTone {
+  if (review.decision === 'request_human_review') return 'warning'
+  if (review.decision === 'continue_auto') return 'neutral'
+  if (review.overall_ok) return 'success'
   return 'neutral'
 }
 
@@ -172,6 +203,23 @@ const timelineEvents = computed<JobEvent[]>(() => (
             </div>
           </div>
 
+          <div v-if="round.candidates.some((candidate) => candidate.review)" class="round-score-board">
+            <div
+              v-for="candidate in round.candidates"
+              :key="`${round.id}-${candidate.candidate_id}-score`"
+              class="round-score-item"
+              :class="{ selected: candidate.selected }"
+            >
+              <div class="round-score-label">
+                <span>{{ candidate.label || candidate.candidate_id }}</span>
+                <strong>{{ candidateScoreLabel(candidate) }}</strong>
+              </div>
+              <div class="score-track">
+                <span class="score-fill" :style="{ width: candidateScoreWidth(candidate) }"></span>
+              </div>
+            </div>
+          </div>
+
           <div class="candidate-grid">
             <article
               v-for="candidate in round.candidates"
@@ -184,7 +232,7 @@ const timelineEvents = computed<JobEvent[]>(() => (
                   <h5>{{ candidate.label || candidate.candidate_id }}</h5>
                   <p>{{ candidate.program?.summary || '无额外说明' }}</p>
                 </div>
-                <span class="score">{{ percent(candidate.review?.score) }}</span>
+                <span class="score">评分 {{ candidateScoreLabel(candidate) }}</span>
               </div>
               <img
                 v-if="imageUrl(candidate.preview_execution)"
@@ -241,11 +289,15 @@ const timelineEvents = computed<JobEvent[]>(() => (
           <p class="eyebrow">Final review</p>
           <h3>最终评估</h3>
         </div>
-        <span class="pill" :class="{ success: finalReview.overall_ok, warning: finalReview.should_request_review }">
-          {{ finalReview.should_request_review ? '需复核' : '完成' }}
+        <span class="pill" :class="reviewDecisionTone(finalReview)">
+          {{ reviewDecisionLabel(finalReview.decision) }}
         </span>
       </div>
       <p class="review-summary">{{ finalReview.summary }}</p>
+      <p v-if="finalReview.decision_reason" class="review-summary muted">{{ finalReview.decision_reason }}</p>
+      <p v-if="finalReview.correction_objective" class="review-summary">
+        下一轮：{{ focusLabel(finalReview.next_focus) }} · {{ finalReview.correction_objective }}
+      </p>
       <div class="final-stats">
         <span>{{ finalReview.success_count }} 成功</span>
         <span>{{ finalReview.failure_count }} 失败</span>
@@ -472,6 +524,62 @@ const timelineEvents = computed<JobEvent[]>(() => (
 
 .candidate-grid {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.round-score-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.round-score-item {
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.round-score-item.selected {
+  border-color: rgba(74, 222, 128, 0.42);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.round-score-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.round-score-label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.round-score-label strong {
+  flex: 0 0 auto;
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+.score-track {
+  height: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.score-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(125, 211, 252, 0.72), rgba(74, 222, 128, 0.78));
 }
 
 .guidance-card {

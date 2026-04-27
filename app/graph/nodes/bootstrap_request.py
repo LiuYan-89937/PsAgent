@@ -33,11 +33,10 @@ def bootstrap_request(state: EditState) -> dict[str, object]:
 
     writer = _safe_stream_writer()
     raw_instruction = str(state.get("request_text") or "").strip()
-    mode = str(state.get("mode") or "explicit")
     input_images = list(state.get("input_images") or [])
     fallback_trace = list(state.get("fallback_trace") or [])
 
-    if raw_instruction and mode != "auto":
+    if raw_instruction:
         writer(
             {
                 "event": "bootstrap_finished",

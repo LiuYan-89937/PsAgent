@@ -37,8 +37,8 @@ class GraphNodeNormalizationTest(unittest.TestCase):
         with patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=False):
             result = parse_request({"request_text": "把背景稍微压暗一点并提亮主体"})
 
-        self.assertEqual(result["mode"], "explicit")
-        self.assertEqual(result["request_intent"]["mode"], "explicit")
+        self.assertEqual(result["mode"], "auto")
+        self.assertEqual(result["request_intent"]["mode"], "auto")
         self.assertTrue(result["request_intent"]["goals"])
         self.assertFalse(result["request_intent"]["requested_tools"])
 
@@ -48,7 +48,7 @@ class GraphNodeNormalizationTest(unittest.TestCase):
             Image.new("RGB", (32, 32), (90, 100, 110)).save(image_path)
             result = bootstrap_request(
                 {
-                    "mode": "explicit",
+                    "mode": "auto",
                     "request_text": "提亮一点",
                     "input_images": [image_path],
                 }
@@ -93,6 +93,34 @@ class GraphNodeNormalizationTest(unittest.TestCase):
         self.assertIn("human_review_continuation", gap["constraints"])
         self.assertEqual(result["search_effort"], "ultra")
         self.assertEqual(result["search_cycle_round_offset"], 1)
+
+    def test_human_review_accept_final_note_does_not_continue(self) -> None:
+        with patch(
+            "app.graph.nodes.human_review.interrupt",
+            return_value={"approved": True, "note": "确认", "search_effort": "standard"},
+        ):
+            result = human_review(
+                {
+                    "approval_payload": {
+                        "reason": "final_review_unresolved_after_max_rounds",
+                        "summary": "还有可优化空间。",
+                        "suggested_action": "继续调整。",
+                    },
+                    "objective_card": {
+                        "summary": "自然美化",
+                        "mode": "auto",
+                        "domain": "portrait",
+                        "preserve": [],
+                        "goals": [],
+                        "gaps": [],
+                        "constraints": [],
+                    },
+                }
+            )
+
+        self.assertFalse(result["needs_search_continuation"])
+        self.assertFalse(result["human_review_continuation"])
+        self.assertNotIn("objective_card", result)
 
     def test_update_memory_normalizes_candidates(self) -> None:
         result = update_memory(

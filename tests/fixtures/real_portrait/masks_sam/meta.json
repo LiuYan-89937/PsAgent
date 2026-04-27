@@ -21,30 +21,6 @@
       "binary_mask_path": "/Users/liuyan/Desktop/PsAgent/tests/fixtures/real_portrait/masks_sam/hair.png"
     },
     {
-      "mask_name": "eye",
-      "prompt": "eye",
-      "provider": "fal_sam3",
-      "binary_mask_path": "/Users/liuyan/Desktop/PsAgent/tests/fixtures/real_portrait/masks_sam/eye.png"
-    },
-    {
-      "mask_name": "under_eye",
-      "prompt": "under eye",
-      "provider": "fal_sam3",
-      "binary_mask_path": "/Users/liuyan/Desktop/PsAgent/tests/fixtures/real_portrait/masks_sam/under_eye.png"
-    },
-    {
-      "mask_name": "lips",
-      "prompt": "lips",
-      "provider": "fal_sam3",
-      "binary_mask_path": "/Users/liuyan/Desktop/PsAgent/tests/fixtures/real_portrait/masks_sam/lips.png"
-    },
-    {
-      "mask_name": "teeth",
-      "prompt": "teeth",
-      "provider": "fal_sam3",
-      "binary_mask_path": "/Users/liuyan/Desktop/PsAgent/tests/fixtures/real_portrait/masks_sam/teeth.png"
-    },
-    {
       "mask_name": "skin",
       "prompt": "skin",
       "provider": "fal_sam3",

@@ -13,6 +13,6 @@ def build_objective(state: EditState) -> dict[str, object]:
         request_text=str(state.get("request_text") or ""),
         request_intent=coerce_request_intent(state.get("request_intent")),
         image_analysis=coerce_image_analysis(state.get("image_analysis")),
-        mode=str(state.get("mode") or "explicit"),
+        mode="auto",
     )
     return {"objective_card": objective.model_dump(mode="json")}

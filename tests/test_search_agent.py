@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from app.graph.state import CandidateProgram, MaskCatalog, ObjectiveCard, ObjectiveGap, PlannerExecutionStep, RequestIntent, RoundGuidance
+from PIL import Image
+
+from app.graph.state import CandidateProgram, MaskCatalog, ObjectiveCard, ObjectiveGap, PlannerExecutionStep, RoundGuidance
 from app.graph.nodes.run_search_agent import run_search_agent
+from app.services.search_agent.candidate_review_model import build_candidate_review_payload, review_candidate_batch
 from app.services.search_agent.orchestrator import run_search_first_agent
 from app.services.search_agent.round_guidance_model import build_round_guidance_payload, generate_round_guidance
 from app.services.tool_runtime.chain_executor import ChainExecutionResult
@@ -15,7 +22,6 @@ from app.services.tool_runtime.chain_executor import ChainExecutionResult
 def _objective(focus: str = "global_tone") -> ObjectiveCard:
     return ObjectiveCard(
         summary="自然美化",
-        mode="auto",
         domain="general",
         preserve=[],
         goals=[],
@@ -89,7 +95,7 @@ def _chain_result(
     )
 
 
-def _program(focus: str, suffix: str, *, steps: int = 1, source: str = "model") -> CandidateProgram:
+def _program(focus: str, suffix: str, *, steps: int = 2, source: str = "model") -> CandidateProgram:
     return CandidateProgram(
         id=f"{focus}_{suffix}",
         label=f"候选 {suffix}",
@@ -103,7 +109,7 @@ def _program(focus: str, suffix: str, *, steps: int = 1, source: str = "model") 
     )
 
 
-def _guidance(focus: str, *, count: int = 3, steps: int = 1, candidates: list[CandidateProgram] | None = None) -> RoundGuidance:
+def _guidance(focus: str, *, count: int = 3, steps: int = 2, candidates: list[CandidateProgram] | None = None) -> RoundGuidance:
     return RoundGuidance(
         focus=focus,  # type: ignore[arg-type]
         target_prompt=f"{focus} 本轮导向",
@@ -117,12 +123,12 @@ def _guidance(focus: str, *, count: int = 3, steps: int = 1, candidates: list[Ca
 class SearchAgentTest(unittest.TestCase):
     """Verify the search-first agent contract."""
 
-    def test_auto_mode_generates_three_candidates_and_commits_only_selected(self) -> None:
+    def test_search_generates_three_candidates_and_commits_only_selected(self) -> None:
         committed: list[str] = []
 
         def fake_preview(*, input_image_path, program, round_id, max_steps, **_kwargs):
-            self.assertLessEqual(len(program.steps), 2)
-            self.assertEqual(max_steps, 2)
+            self.assertLessEqual(len(program.steps), 3)
+            self.assertEqual(max_steps, 3)
             return _chain_result(
                 input_path=input_image_path,
                 output_path=f"/tmp/preview_{program.id}.png",
@@ -149,8 +155,6 @@ class SearchAgentTest(unittest.TestCase):
             result = run_search_first_agent(
                 input_image_path="/tmp/input.png",
                 objective=_objective("global_tone"),
-                request_intent=None,
-                mode="auto",
                 min_rounds=1,
                 max_rounds=1,
             )
@@ -164,11 +168,119 @@ class SearchAgentTest(unittest.TestCase):
         self.assertEqual(len(result["final_execution_trace"]), 1)
         self.assertNotIn("preview", result["candidate_outputs"][0])
 
+    def test_candidate_previews_run_concurrently(self) -> None:
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+        barrier = threading.Barrier(3)
+
+        def fake_preview(*, input_image_path, program, round_id, max_steps, **_kwargs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                barrier.wait(timeout=2)
+                return _chain_result(
+                    input_path=input_image_path,
+                    output_path=f"/tmp/preview_{program.id}.png",
+                    round_id=round_id,
+                    focus=program.focus,
+                    candidate_id=program.id,
+                )
+            finally:
+                with lock:
+                    active -= 1
+
+        def fake_commit(*, input_image_path, program, round_id, **_kwargs):
+            return _chain_result(
+                input_path=input_image_path,
+                output_path=f"/tmp/full_{program.id}.png",
+                round_id=round_id,
+                focus=program.focus,
+                candidate_id=program.id,
+            )
+
+        with (
+            patch.dict(os.environ, {"PSAGENT_PREVIEW_CONCURRENCY": "3"}),
+            patch("app.services.search_agent.orchestrator.generate_round_guidance", return_value=_guidance("global_tone")),
+            patch("app.services.search_agent.orchestrator.execute_preview", side_effect=fake_preview),
+            patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit),
+        ):
+            run_search_first_agent(
+                input_image_path="/tmp/input.png",
+                objective=_objective("global_tone"),
+                min_rounds=1,
+                max_rounds=1,
+            )
+
+        self.assertGreaterEqual(max_active, 2)
+
+    def test_candidate_batch_review_selects_visual_model_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            input_path = root / "input.png"
+            Image.new("RGB", (32, 32), (100, 100, 100)).save(input_path)
+            committed: list[str] = []
+
+            def fake_preview(*, input_image_path, program, round_id, max_steps, **_kwargs):
+                output_path = root / f"preview_{program.id}.png"
+                color = (120, 120, 120) if program.id.endswith("_0") else (180, 170, 150) if program.id.endswith("_1") else (90, 90, 90)
+                Image.new("RGB", (32, 32), color).save(output_path)
+                return _chain_result(
+                    input_path=input_image_path,
+                    output_path=str(output_path),
+                    round_id=round_id,
+                    focus=program.focus,
+                    candidate_id=program.id,
+                )
+
+            def fake_commit(*, input_image_path, program, round_id, **_kwargs):
+                committed.append(program.id)
+                output_path = root / f"full_{program.id}.png"
+                Image.new("RGB", (32, 32), (190, 180, 160)).save(output_path)
+                return _chain_result(
+                    input_path=input_image_path,
+                    output_path=str(output_path),
+                    round_id=round_id,
+                    focus=program.focus,
+                    candidate_id=program.id,
+                )
+
+            with (
+                patch("app.services.search_agent.orchestrator.generate_round_guidance", return_value=_guidance("global_tone")),
+                patch("app.services.search_agent.orchestrator.execute_preview", side_effect=fake_preview),
+                patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit),
+                patch("app.services.search_agent.candidate_review_model.model_available", return_value=True),
+                patch(
+                    "app.services.search_agent.candidate_review_model.invoke_json",
+                    return_value={
+                        "candidate_scores": [
+                            {"candidate_id": "global_tone_0", "score": 3.1},
+                            {"candidate_id": "global_tone_1", "score": 4.6},
+                            {"candidate_id": "global_tone_2", "score": 2.4},
+                        ],
+                    },
+                ) as invoke_mock,
+            ):
+                result = run_search_first_agent(
+                    input_image_path=str(input_path),
+                    objective=_objective("global_tone"),
+                    min_rounds=1,
+                    max_rounds=1,
+                )
+
+        self.assertEqual(committed, ["global_tone_1"])
+        self.assertEqual(result["rounds"][0].selected_candidate_id, "global_tone_1")
+        self.assertEqual(result["rounds"][0].candidates[0].eliminated_reason, "候选 0 小模型视觉评分 3.10。")
+        self.assertEqual(invoke_mock.call_args.kwargs["model_env_name"], "OPENAI_CANDIDATE_REVIEW_MODEL")
+        self.assertEqual(invoke_mock.call_args.kwargs["default_model"], "qwen3-vl-flash")
+
     def test_fallback_commit_triggers_same_round_recovery_with_two_candidates(self) -> None:
         commit_calls: list[str] = []
 
         def fake_preview(*, input_image_path, program, round_id, max_steps, **_kwargs):
-            self.assertEqual(max_steps, 2)
+            self.assertIn(max_steps, {2, 3})
             return _chain_result(
                 input_path=input_image_path,
                 output_path=f"/tmp/preview_{program.id}.png",
@@ -199,8 +311,6 @@ class SearchAgentTest(unittest.TestCase):
             result = run_search_first_agent(
                 input_image_path="/tmp/input.png",
                 objective=_objective("subject_cleanup"),
-                request_intent=None,
-                mode="auto",
                 min_rounds=1,
                 max_rounds=1,
             )
@@ -261,8 +371,6 @@ class SearchAgentTest(unittest.TestCase):
             result = run_search_first_agent(
                 input_image_path="/tmp/input.png",
                 objective=_objective("finish"),
-                request_intent=None,
-                mode="auto",
                 min_rounds=1,
                 max_rounds=1,
             )
@@ -303,8 +411,6 @@ class SearchAgentTest(unittest.TestCase):
             result = run_search_first_agent(
                 input_image_path="/tmp/input.png",
                 objective=_objective("global_tone"),
-                request_intent=None,
-                mode="auto",
                 min_rounds=1,
                 max_rounds=1,
             )
@@ -354,8 +460,6 @@ class SearchAgentTest(unittest.TestCase):
             result = run_search_first_agent(
                 input_image_path="/tmp/input.png",
                 objective=objective,
-                request_intent=None,
-                mode="auto",
                 min_rounds=4,
                 max_rounds=4,
             )
@@ -366,52 +470,6 @@ class SearchAgentTest(unittest.TestCase):
         self.assertEqual(guidance_mock.call_count, 4)
         self.assertEqual(commit_mock.call_count, 4)
         self.assertIn("search_refinement_round", result["rounds"][1].objective_gaps[0].constraints)
-
-    def test_explicit_mode_uses_direct_round_without_search_preview(self) -> None:
-        request_intent = RequestIntent(
-            mode="explicit",
-            domain="general",
-            requested_tools=[
-                {
-                    "op": "adjust_exposure",
-                    "region": "whole_image",
-                    "strength": 0.2,
-                    "params": {},
-                    "constraints": [],
-                }
-            ],
-            goals=[],
-            constraints=[],
-            preserve=[],
-        )
-
-        def fake_commit(*, input_image_path, program, round_id, **_kwargs):
-            return _chain_result(
-                input_path=input_image_path,
-                output_path=f"/tmp/full_{program.id}.png",
-                round_id=round_id,
-                focus=program.focus,
-                candidate_id=program.id,
-            )
-
-        with (
-            patch("app.services.search_agent.orchestrator.generate_round_guidance") as guidance_mock,
-            patch("app.services.search_agent.orchestrator.execute_preview") as preview_mock,
-            patch("app.services.search_agent.orchestrator.execute_chain", side_effect=fake_commit) as commit_mock,
-        ):
-            result = run_search_first_agent(
-                input_image_path="/tmp/input.png",
-                objective=_objective("global_tone"),
-                request_intent=request_intent,
-                mode="explicit",
-            )
-
-        guidance_mock.assert_not_called()
-        preview_mock.assert_not_called()
-        self.assertEqual(commit_mock.call_count, 1)
-        self.assertEqual(len(result["rounds"]), 1)
-        self.assertEqual(len(result["rounds"][0].candidates), 1)
-        self.assertEqual(result["rounds"][0].candidates[0].program.source, "direct")
 
     def test_run_search_agent_appends_continuation_round_to_existing_artifacts(self) -> None:
         continuation_round = {
@@ -579,6 +637,7 @@ class RoundGuidanceModelTest(unittest.TestCase):
         )
 
         self.assertIn("当前round", payload)
+        self.assertEqual(payload["候选限制"]["min_steps_per_non_stop_candidate"], 2)
         self.assertNotIn("previous_rounds", payload)
         self.assertNotIn("execution_trace", payload)
         self.assertNotIn("selected_candidate_history", payload)
@@ -595,7 +654,14 @@ class RoundGuidanceModelTest(unittest.TestCase):
                     "avoid": ["背景抬灰"],
                     "candidates": [
                         {"label": "非法工具", "summary": "不应执行", "steps": [{"op": "not_a_tool", "params": {}}]},
-                        {"label": "有效工具", "summary": "可以执行", "steps": [{"op": "adjust_exposure", "params": {"strength": 0.2}}]},
+                        {
+                            "label": "有效工具",
+                            "summary": "可以执行",
+                            "steps": [
+                                {"op": "adjust_exposure", "params": {"strength": 60}},
+                                {"op": "adjust_brightness", "params": {"brightness_offset": 65}},
+                            ],
+                        },
                     ],
                 },
             ) as invoke_mock,
@@ -615,6 +681,170 @@ class RoundGuidanceModelTest(unittest.TestCase):
         self.assertEqual(guidance.candidate_programs[0].source, "noop")
         self.assertEqual(guidance.candidate_programs[1].source, "model")
         self.assertEqual(guidance.candidate_programs[1].steps[0].op, "adjust_exposure")
+        self.assertAlmostEqual(guidance.candidate_programs[1].steps[0].params["strength"], 0.45)
+        self.assertAlmostEqual(guidance.candidate_programs[1].steps[1].params["brightness_offset"], 0.18)
+
+    def test_one_step_auto_candidate_is_rejected_to_noop(self) -> None:
+        with (
+            patch("app.services.search_agent.round_guidance_model.model_available", return_value=True),
+            patch(
+                "app.services.search_agent.round_guidance_model.invoke_json",
+                return_value={
+                    "target_prompt": "自然提亮",
+                    "visual_diagnosis": "候选只有一步",
+                    "preserve": [],
+                    "avoid": [],
+                    "candidates": [
+                        {"label": "单步曝光", "summary": "不应作为普通 auto 候选", "steps": [{"op": "adjust_exposure", "params": {"strength": 40}}]},
+                    ],
+                },
+            ),
+        ):
+            guidance = generate_round_guidance(
+                current_image_path="/tmp/current.png",
+                objective=_objective("global_tone"),
+                focus="global_tone",
+                round_gaps=_objective("global_tone").gaps,
+                tool_catalog=[{"name": "adjust_exposure", "description": "曝光", "supported_regions": ["whole_image"], "params_schema": {}}],
+                candidate_count=1,
+                max_steps=3,
+            )
+
+        self.assertEqual(guidance.candidate_programs[0].source, "noop")
+        self.assertEqual(guidance.candidate_programs[0].steps, [])
+
+
+class CandidateReviewModelTest(unittest.TestCase):
+    """Verify the per-round candidate review model contract."""
+
+    def test_candidate_review_payload_is_current_round_batch(self) -> None:
+        program = _program("global_tone", "0")
+        execution = _chain_result(
+            input_path="/tmp/current.png",
+            output_path="/tmp/preview.png",
+            round_id="round_1",
+            focus="global_tone",
+            candidate_id=program.id,
+        ).to_candidate_execution()
+        artifact = {
+            "candidate_id": program.id,
+            "label": program.label,
+            "focus": program.focus,
+            "program": program,
+            "preview_execution": execution,
+            "review": None,
+        }
+        from app.graph.state import SearchCandidateArtifact
+
+        payload = build_candidate_review_payload(target="自然提亮", artifacts=[SearchCandidateArtifact.model_validate(artifact)])
+
+        self.assertIn("图片顺序", payload)
+        self.assertEqual(payload["目标"], "自然提亮")
+        self.assertEqual(payload["图片顺序"][0]["role"], "current_image")
+        self.assertNotIn("candidate_id", payload["图片顺序"][0])
+        self.assertEqual(payload["图片顺序"][1]["role"], "candidate_preview")
+        self.assertEqual(payload["图片顺序"][1]["candidate_id"], program.id)
+        self.assertNotIn("label", payload["图片顺序"][1])
+        self.assertNotIn("总目标摘要", payload)
+        self.assertNotIn("当前round", payload)
+        self.assertNotIn("候选", payload)
+        self.assertNotIn("previous_rounds", payload)
+        self.assertNotIn("execution_trace", payload)
+        self.assertNotIn("selected_candidate_history", payload)
+
+    def test_candidate_review_batch_uses_qwen_vl_flash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            current = root / "current.png"
+            preview = root / "preview.png"
+            Image.new("RGB", (24, 24), (120, 120, 120)).save(current)
+            Image.new("RGB", (24, 24), (150, 150, 150)).save(preview)
+            program = _program("global_tone", "0")
+            execution = _chain_result(
+                input_path=str(current),
+                output_path=str(preview),
+                round_id="round_1",
+                focus="global_tone",
+                candidate_id=program.id,
+            ).to_candidate_execution()
+            from app.graph.state import SearchCandidateArtifact
+
+            artifact = SearchCandidateArtifact(
+                candidate_id=program.id,
+                label=program.label,
+                focus="global_tone",
+                program=program,
+                preview_execution=execution,
+            )
+
+            with (
+                patch("app.services.search_agent.candidate_review_model.model_available", return_value=True),
+                patch(
+                    "app.services.search_agent.candidate_review_model.invoke_json",
+                    return_value={
+                        "candidate_scores": [{"candidate_id": program.id, "score": 4.2}],
+                    },
+                ) as invoke_mock,
+            ):
+                batch = review_candidate_batch(
+                    current_image_path=str(current),
+                    objective_summary="自然提亮",
+                    focus="global_tone",
+                    round_gaps=_objective("global_tone").gaps,
+                    guidance=_guidance("global_tone"),
+                    artifacts=[artifact],
+                )
+
+        self.assertIsNotNone(batch)
+        self.assertEqual(batch.selected_candidate_id, program.id)
+        self.assertEqual(invoke_mock.call_args.kwargs["image_paths"], [str(current), str(preview)])
+        self.assertEqual(invoke_mock.call_args.kwargs["user_payload"]["目标"], "global_tone 本轮导向")
+        self.assertEqual(invoke_mock.call_args.kwargs["model_env_name"], "OPENAI_CANDIDATE_REVIEW_MODEL")
+        self.assertEqual(invoke_mock.call_args.kwargs["default_model"], "qwen3-vl-flash")
+
+    def test_candidate_review_rejects_non_score_only_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            current = root / "current.png"
+            preview = root / "preview.png"
+            Image.new("RGB", (24, 24), (120, 120, 120)).save(current)
+            Image.new("RGB", (24, 24), (150, 150, 150)).save(preview)
+            program = _program("global_tone", "0")
+            execution = _chain_result(
+                input_path=str(current),
+                output_path=str(preview),
+                round_id="round_1",
+                focus="global_tone",
+                candidate_id=program.id,
+            ).to_candidate_execution()
+            from app.graph.state import SearchCandidateArtifact
+
+            artifact = SearchCandidateArtifact(
+                candidate_id=program.id,
+                label=program.label,
+                focus="global_tone",
+                program=program,
+                preview_execution=execution,
+            )
+
+            with (
+                patch("app.services.search_agent.candidate_review_model.model_available", return_value=True),
+                patch(
+                    "app.services.search_agent.candidate_review_model.invoke_json",
+                    return_value={
+                        "candidate_scores": [{"candidate_id": program.id, "score": 4.2, "summary": "extra"}],
+                    },
+                ),
+            ):
+                with self.assertRaises(RuntimeError):
+                    review_candidate_batch(
+                        current_image_path=str(current),
+                        objective_summary="自然提亮",
+                        focus="global_tone",
+                        round_gaps=_objective("global_tone").gaps,
+                        guidance=_guidance("global_tone"),
+                        artifacts=[artifact],
+                    )
 
 
 if __name__ == "__main__":

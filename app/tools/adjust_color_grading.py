@@ -21,7 +21,7 @@ def adjust_color_grading(
     highlight_hue: Annotated[float, Field(default=0.0, ge=0.0, le=360.0)] = 0.0,
     highlight_saturation: Annotated[float, Field(default=0.0, ge=0.0, le=1.0)] = 0.0,
     balance: Annotated[float, Field(default=0.0, ge=-1.0, le=1.0)] = 0.0,
-    blending: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5,
+    blending: Annotated[float, Field(default=0.24, ge=0.0, le=1.0)] = 0.24,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -77,7 +77,7 @@ ADJUST_COLOR_GRADING_SPEC = ToolSpec(
         "highlight_hue": 0.0,
         "highlight_saturation": 0.0,
         "balance": 0.0,
-        "blending": 0.5,
+        "blending": 0.24,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

@@ -14,10 +14,10 @@ from app.tools.image_ops import apply_skin_smooth
 @tool
 def adjust_skin_smooth(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    strength: Annotated[float, Field(default=0.4, ge=0.0, le=1.0)] = 0.4,
-    smooth_strength: Annotated[float, Field(default=0.4, ge=0.0, le=1.0)] = 0.4,
-    detail_protection: Annotated[float, Field(default=0.6, ge=0.0, le=1.0)] = 0.6,
-    saturation_protection: Annotated[float, Field(default=0.2, ge=0.0, le=1.0)] = 0.2,
+    strength: Annotated[float, Field(default=0.26, ge=0.0, le=1.0)] = 0.26,
+    smooth_strength: Annotated[float, Field(default=0.24, ge=0.0, le=1.0)] = 0.24,
+    detail_protection: Annotated[float, Field(default=0.78, ge=0.0, le=1.0)] = 0.78,
+    saturation_protection: Annotated[float, Field(default=0.34, ge=0.0, le=1.0)] = 0.34,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -60,7 +60,7 @@ ADJUST_SKIN_SMOOTH_SPEC = ToolSpec(
     requires_mask=True,
     supports_whole_image=False,
     recommended_mask_prompt="skin",
-    default_params={"strength": 0.4, "smooth_strength": 0.4, "detail_protection": 0.6, "saturation_protection": 0.2, "feather_radius": 18.0},
+    default_params={"strength": 0.26, "smooth_strength": 0.24, "detail_protection": 0.78, "saturation_protection": 0.34, "feather_radius": 18.0},
     planner_schema=build_planner_schema(adjust_skin_smooth, supports_mask=True, mask_schema=MASK_PARAMS_SCHEMA, excluded_fields={"image_path", "mask_path"}),
     primary_param="smooth_strength",
     risk_level="medium",

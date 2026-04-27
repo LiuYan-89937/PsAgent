@@ -15,7 +15,7 @@ from app.tools.image_ops import apply_lut_preset
 def apply_color_lookup(
     image_path: Annotated[str, Field(description="Runtime image path.")],
     preset: Annotated[str, Field(default="clean_portrait", description="Preset / LUT name.")] = "clean_portrait",
-    strength: Annotated[float, Field(default=0.5, ge=0.0, le=1.0, description="Preset blend strength.")] = 0.5,
+    strength: Annotated[float, Field(default=0.22, ge=0.0, le=1.0, description="Preset blend strength.")] = 0.22,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -53,7 +53,7 @@ APPLY_COLOR_LOOKUP_SPEC = ToolSpec(
     supports_whole_image=True,
     default_params={
         "preset": "clean_portrait",
-        "strength": 0.5,
+        "strength": 0.22,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

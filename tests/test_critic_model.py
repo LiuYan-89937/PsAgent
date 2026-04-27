@@ -22,8 +22,10 @@ class CriticModelTest(unittest.TestCase):
                 "issues": [],
                 "warnings": [],
                 "summary": "ok",
-                "should_continue_editing": False,
-                "should_request_review": False,
+                "decision": "accept",
+                "next_focus": None,
+                "correction_objective": "",
+                "decision_reason": "结果可接受",
             },
         ) as mocked_call:
             evaluate_edit_result(
@@ -31,7 +33,7 @@ class CriticModelTest(unittest.TestCase):
                 edited_image_path="/tmp/edited.png",
                 request_text="自然一点",
                 edit_plan={
-                    "mode": "explicit",
+                    "mode": "auto",
                     "operations": [
                         {
                             "op": "adjust_exposure",

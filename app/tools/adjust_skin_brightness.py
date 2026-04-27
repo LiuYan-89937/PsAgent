@@ -14,10 +14,10 @@ from app.tools.image_ops import apply_regional_enhancement
 @tool
 def adjust_skin_brightness(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    brightness_shift: Annotated[float, Field(default=0.1, ge=-1.0, le=1.0)] = 0.1,
+    brightness_shift: Annotated[float, Field(default=0.08, ge=-1.0, le=1.0)] = 0.08,
     saturation_shift: Annotated[float, Field(default=-0.05, ge=-1.0, le=1.0)] = -0.05,
-    highlight_protection: Annotated[float, Field(default=0.25, ge=0.0, le=1.0)] = 0.25,
-    preserve_texture: Annotated[float, Field(default=0.6, ge=0.0, le=1.0)] = 0.6,
+    highlight_protection: Annotated[float, Field(default=0.42, ge=0.0, le=1.0)] = 0.42,
+    preserve_texture: Annotated[float, Field(default=0.78, ge=0.0, le=1.0)] = 0.78,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -66,10 +66,10 @@ ADJUST_SKIN_BRIGHTNESS_SPEC = ToolSpec(
     supports_whole_image=False,
     recommended_mask_prompt="skin",
     default_params={
-        "brightness_shift": 0.1,
+        "brightness_shift": 0.08,
         "saturation_shift": -0.05,
-        "highlight_protection": 0.25,
-        "preserve_texture": 0.6,
+        "highlight_protection": 0.42,
+        "preserve_texture": 0.78,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

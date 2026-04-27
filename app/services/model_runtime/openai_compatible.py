@@ -20,6 +20,7 @@ from app.services.env import load_project_env
 DEFAULT_TEXT_MODEL = "gpt-4o-mini"
 DEFAULT_VISION_MODEL = "gpt-4o-mini"
 DEFAULT_CRITIC_MODEL = "gpt-4o-mini"
+DEFAULT_CANDIDATE_REVIEW_MODEL = "qwen3-vl-flash"
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
 

@@ -93,11 +93,11 @@ function clearPollTimer() {
 function extractLatestInterrupt(detail: JobDetailResponse): { payload: any; message: string } | null {
   const latestInterrupt = [...detail.events]
     .reverse()
-    .find((event) => event.event === 'interrupt')
+    .find((event) => event.event === 'interrupt' || event.event === 'job_interrupted')
 
   if (!latestInterrupt) return null
   return {
-    payload: latestInterrupt.payload ?? null,
+    payload: latestInterrupt.payload ?? latestInterrupt.approval_payload ?? null,
     message: typeof latestInterrupt.message === 'string' ? latestInterrupt.message : (detail.job.current_message || ''),
   }
 }
@@ -106,9 +106,34 @@ async function fetchJobDetailForReview() {
   if (!currentJobId.value) return
   try {
     const detail = await getJob(currentJobId.value)
-    jobDetail.value = detail
+    applyReviewDetail(detail)
   } catch (err) {
     console.warn('获取审核详情失败', err)
+  }
+}
+
+function applyReviewDetail(detail: JobDetailResponse) {
+  const interrupt = extractLatestInterrupt(detail)
+  jobDetail.value = detail
+  reviewPayload.value = interrupt?.payload ?? null
+  reviewMessage.value = interrupt?.message || detail.job.current_message || '等待人工确认'
+}
+
+async function refreshTerminalStatus(jobId: string, status: unknown, fallbackErrorDetail?: Record<string, unknown>) {
+  if (status === 'completed') {
+    await fetchJobDetailAndComplete()
+    return
+  }
+  if (status === 'failed') {
+    errorMsg.value = '任务最终执行失败'
+    errorDetail.value = fallbackErrorDetail || null
+    currentState.value = 'fatal_error'
+    return
+  }
+  if (status === 'review_required') {
+    const detail = await getJob(jobId)
+    applyReviewDetail(detail)
+    currentState.value = 'review_required'
   }
 }
 
@@ -128,7 +153,7 @@ function handleCancelUpload() {
   currentState.value = 'idle'
 }
 
-async function handleStartEdit(instruction?: string | null, autoMode = false, effort: SearchEffort = searchEffort.value) {
+async function handleStartEdit(instruction?: string | null, effort: SearchEffort = searchEffort.value) {
   if (!currentAsset.value) return
 
   clearPollTimer()
@@ -144,7 +169,6 @@ async function handleStartEdit(instruction?: string | null, autoMode = false, ef
   const payload = {
     user_id: 'web-user',
     instruction: instruction?.trim() || undefined,
-    auto_mode: autoMode,
     planner_thinking_mode: plannerThinkingEnabled.value,
     search_effort: effort,
     input_asset_ids: [currentAsset.value.asset_id]
@@ -196,7 +220,7 @@ async function handleStartEdit(instruction?: string | null, autoMode = false, ef
 }
 
 async function handleAutoBeautify(effort: SearchEffort = searchEffort.value) {
-  await handleStartEdit(undefined, true, effort)
+  await handleStartEdit(undefined, effort)
 }
 
 async function fetchJobDetailAndComplete() {
@@ -217,34 +241,38 @@ async function handleResumeReview(approved: boolean, note: string, effort: Searc
   if (!currentJobId.value) return
 
   clearPollTimer()
-  // 恢复状态到 processing 显示
+  const jobId = currentJobId.value
   currentState.value = 'processing'
   try {
-    await resumeReview({
-      job_id: currentJobId.value,
+    const resumePromise = resumeReview({
+      job_id: jobId,
       approved,
       note,
       search_effort: effort
     })
-    const jobId = currentJobId.value
     void streamJobEvents(jobId, (eventName, data) => {
       sseEvents.value.push(data)
+      if (eventName === 'interrupt') {
+        reviewPayload.value = data.payload
+        reviewMessage.value = data.message || '等待人工确认'
+        currentState.value = 'review_required'
+        void fetchJobDetailForReview()
+        return
+      }
+      if (eventName === 'job_interrupted') {
+        currentState.value = 'review_required'
+        void fetchJobDetailForReview()
+        return
+      }
       if (eventName === 'job_status' && data.payload && typeof data.payload === 'object') {
         const status = (data.payload as Record<string, unknown>).status
-        if (status === 'completed') {
-          void fetchJobDetailAndComplete()
-        } else if (status === 'failed') {
-          errorMsg.value = '任务最终执行失败'
-          errorDetail.value = (data.error_detail as Record<string, unknown> | undefined) || null
-          currentState.value = 'fatal_error'
-        } else if (status === 'review_required') {
-          void fetchJobDetailForReview()
-          currentState.value = 'review_required'
-        }
+        void refreshTerminalStatus(jobId, status, data.error_detail as Record<string, unknown> | undefined)
       }
-    }).catch(() => {
+    }, { waitForResume: true }).catch(() => {
       pollJobStatus(jobId)
     })
+    const response = await resumePromise
+    await refreshTerminalStatus(jobId, response.status)
   } catch (err) {
     errorMsg.value = '从人工审核恢复失败'
     errorDetail.value = err instanceof Error ? { type: err.name, message: err.message } : null
@@ -357,7 +385,7 @@ onBeforeUnmount(() => {
             :asset="currentAsset"
             :search-effort="searchEffort"
             @update:search-effort="searchEffort = $event"
-            @submit="(instruction, effort) => handleStartEdit(instruction, false, effort)"
+            @submit="handleStartEdit"
             @auto-beautify="handleAutoBeautify"
             @cancel="handleCancelUpload"
           />

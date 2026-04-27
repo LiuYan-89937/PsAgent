@@ -26,16 +26,26 @@
   "issues": ["..."],
   "warnings": ["..."],
   "summary": "中文简短总结",
-  "should_continue_editing": false,
-  "should_request_review": false
+  "decision": "accept",
+  "next_focus": null,
+  "correction_objective": "",
+  "decision_reason": "中文简短原因"
 }
 
 评估原则：
 1. 必须对比原图和结果图。
 2. 重点判断：结果是否更接近需求、重要内容是否保住、整体是否自然可信。
 3. 如果结果已经基本可用，但仍有清晰的提升空间，可以保持 `overall_ok=true`，同时把问题写进 `warnings`。
-4. 如果再做一轮能明显更接近目标，就设 `should_continue_editing=true`。
+4. 如果再做一轮能明显更接近目标，就设 `decision="continue_auto"`。
 5. 如果继续编辑的收益已经不大，就不要为了追求完美而强行继续。
-6. 只有在明显需要用户确认时才设 `should_request_review=true`。
-7. `summary` 用中文，简短但具体。
-8. 只返回 JSON。
+6. 只有在明显需要用户确认时才设 `decision="request_human_review"`。
+7. `decision` 是唯一流程决策字段：
+   - `accept`：结果可接受，可以结束。
+   - `continue_auto`：问题明确且可以通过下一轮自动工具修正。
+   - `request_human_review`：需要用户判断取舍，或自动工具继续修风险较高。
+8. 当 `decision="continue_auto"` 时，必须填写：
+   - `next_focus`: `global_tone`、`subject_separation`、`subject_cleanup`、`finish` 之一。
+   - `correction_objective`: 下一轮清晰、可执行的中文纠偏目标。
+9. 当 `decision` 不是 `continue_auto` 时，`next_focus` 设为 null，`correction_objective` 为空字符串。
+10. `summary` 用中文，简短但具体。
+11. 只返回 JSON。

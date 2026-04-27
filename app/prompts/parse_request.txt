@@ -16,10 +16,11 @@
 
 返回结构：
 {
-  "mode": "explicit|auto",
+  "mode": "auto",
   "goals": [
     {
       "kind": "目标类型，例如 lift_luminance/recover_highlights/natural_skin_tone/balance_color/improve_detail/auto_enhance",
+      "focus": "global_tone|subject_separation|subject_cleanup|finish",
       "target_region": "whole_image|动态区域标签",
       "priority": 0,
       "intensity": 0.0,
@@ -48,14 +49,19 @@
 2. `requested_tools` 只在用户明确点名工具函数名或明确说“用某某工具”时填写；普通“提亮/压高光/肤色自然”应写进 `goals`，不要硬映射成工具。
 3. `op` 必须来自 `工具目录`。
 4. 只保留高层意图，不要在这里展开完整多轮策略。
-5. 全图请求时，`target_region`/`region` 写 `whole_image`；局部请求时，写简洁、可读的动态区域标签。
-6. 用户没有明确修图动作时，`mode` 设为 `auto`；有明确修图动作时，`mode` 设为 `explicit`。
-7. 高层偏好、限制条件和结果倾向，更适合写进 `constraints`。
+5. 每个 goal 必须直接给出 `focus`，后续流程不会再根据 `kind` 或 `target_region` 文本猜测 focus：
+   - `global_tone`：整体曝光、对比、色彩、黑白场、高光暗部。
+   - `subject_separation`：主体与背景分离、主体局部可读性、背景压暗/干扰控制。
+   - `subject_cleanup`：面部、肤色、皮肤、头发、五官等人像主体细节。
+   - `finish`：最终质感、细节、降噪、轻量收口。
+6. 全图请求时，`target_region`/`region` 写 `whole_image`；局部请求时，写简洁、可读的动态区域标签。
+7. `mode` 固定设为 `auto`；自定义提示词和智能美化都进入 search-first 自动流程。
+8. 高层偏好、限制条件和结果倾向，更适合写进 `constraints`。
    - 智能美化常见约束应优先保留原图光线、影调、黑位、主体身份和自然肤色。
    - “保留氛围/保留影调/自然美化”不是风格化需求，不要因此把 `wants_style` 设为 true。
-8. 如果用户明显想要更强的效果，不要把意图弱化成过于保守的请求。
-9. 不要在这里发明复杂参数，只做稳定归一化。
-10. `goal_summary` 要简短概括最终想达到的效果。
-11. `wants_repair` 表示用户更偏修复问题；`wants_style` 只在明确要求胶片、梦幻、柔光、复古、电影感、强色调或同款风格时为 true；两者可以同时为 true。
-12. `requires_local_editing` 只在明显需要局部处理时设为 true。
-13. 只返回 JSON。
+9. 如果用户明显想要更强的效果，不要把意图弱化成过于保守的请求。
+10. 不要在这里发明复杂参数，只做稳定归一化。
+11. `goal_summary` 要简短概括最终想达到的效果。
+12. `wants_repair` 表示用户更偏修复问题；`wants_style` 只在明确要求胶片、梦幻、柔光、复古、电影感、强色调或同款风格时为 true；两者可以同时为 true。
+13. `requires_local_editing` 只在明显需要局部处理时设为 true。
+14. 只返回 JSON。

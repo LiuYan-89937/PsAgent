@@ -24,11 +24,25 @@ class ParseRequestNodeTest(unittest.TestCase):
         with patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=False):
             result = parse_request(state)
 
-        self.assertEqual(result["mode"], "explicit")
+        self.assertEqual(result["mode"], "auto")
         self.assertFalse(result["request_intent"]["requested_tools"])
         goals = {item["kind"] for item in result["request_intent"]["goals"]}
         self.assertIn("lift_luminance", goals)
         self.assertIn("background_balance", goals)
+
+    def test_parse_request_respects_search_mode_for_custom_prompt(self) -> None:
+        state = {
+            "mode": "auto",
+            "request_text": "将逆光喷水人像修成明亮清透的夏日胶片风格",
+            "tool_catalog": [],
+        }
+
+        with patch("app.graph.nodes.parse_request.parse_request_model_available", return_value=False):
+            result = parse_request(state)
+
+        self.assertEqual(result["mode"], "auto")
+        self.assertEqual(result["request_intent"]["mode"], "auto")
+        self.assertTrue(result["request_intent"]["goals"])
 
     def test_parse_request_uses_model_when_available(self) -> None:
         state = {
@@ -89,6 +103,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         goal = RequestGoal.model_validate(
             {
                 "kind": "lift_luminance",
+                "focus": "global_tone",
                 "target_region": "whole_image",
                 "priority": 80,
                 "source": "user",
@@ -124,7 +139,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         ):
             result = parse_request(state)
 
-        self.assertEqual(result["mode"], "explicit")
+        self.assertEqual(result["mode"], "auto")
         self.assertTrue(result["request_intent"]["goals"])
         self.assertTrue(result["fallback_trace"])
         self.assertEqual(result["fallback_trace"][-1]["strategy"], "heuristic_request_intent")
@@ -163,7 +178,7 @@ class ParseRequestNodeTest(unittest.TestCase):
         with patch(
             "app.services.parse_request_model.invoke_json",
             return_value={
-                "mode": "explicit",
+                "mode": "auto",
                 "requested_tools": [],
                 "constraints": [],
             },

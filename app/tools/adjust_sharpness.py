@@ -14,10 +14,10 @@ from app.tools.image_ops import apply_sharpen_adjustment
 @tool
 def adjust_sharpness(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    amount: Annotated[float, Field(default=0.5, ge=0.0, le=2.4)] = 0.5,
+    amount: Annotated[float, Field(default=0.38, ge=0.0, le=2.4)] = 0.38,
     radius: Annotated[float, Field(default=1.0, ge=0.4, le=6.0)] = 1.0,
     threshold: Annotated[float, Field(default=0.02, ge=0.0, le=0.2)] = 0.02,
-    highlight_protection: Annotated[float, Field(default=0.24, ge=0.0, le=0.85)] = 0.24,
+    highlight_protection: Annotated[float, Field(default=0.42, ge=0.0, le=0.85)] = 0.42,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -57,7 +57,7 @@ ADJUST_SHARPNESS_SPEC = ToolSpec(
     focus_affinity=["subject_cleanup", "finish"],
     supports_mask=True,
     supports_whole_image=True,
-    default_params={"amount": 0.5, "radius": 1.0, "threshold": 0.02, "highlight_protection": 0.24, "feather_radius": 18.0},
+    default_params={"amount": 0.38, "radius": 1.0, "threshold": 0.02, "highlight_protection": 0.42, "feather_radius": 18.0},
     planner_schema=build_planner_schema(adjust_sharpness, supports_mask=True, mask_schema=MASK_PARAMS_SCHEMA, excluded_fields={"image_path", "mask_path"}),
     primary_param="amount",
     risk_level="low",

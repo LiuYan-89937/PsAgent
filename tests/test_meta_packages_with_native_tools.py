@@ -33,13 +33,6 @@ class MetaPackagesWithNativeToolsTest(unittest.TestCase):
         self.assertNotIn("image_path", exposure["planner_schema"]["properties"])
         self.assertNotIn("mask_path", exposure["planner_schema"]["properties"])
 
-    def test_meta_packages_remains_compatible_alias(self) -> None:
-        response = self.client.get("/meta/packages")
-
-        self.assertEqual(response.status_code, 200)
-        tool_names = {item["name"] for item in response.json()["items"]}
-        self.assertEqual(tool_names, self.expected_tool_names)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@ export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'review
 export type FocusKey = 'global_tone' | 'subject_separation' | 'subject_cleanup' | 'finish'
 export type RoundAction = 'keep' | 'recover_same_round' | 'stop_round'
 export type SearchEffort = 'standard' | 'high' | 'ultra'
+export type ReviewDecision = 'accept' | 'continue_auto' | 'request_human_review'
 
 export interface AssetResponse {
   asset_id: string
@@ -20,7 +21,6 @@ export interface EditRequest {
   user_id: string
   thread_id?: string | null
   instruction?: string | null
-  auto_mode?: boolean
   planner_thinking_mode?: boolean
   search_effort?: SearchEffort
   input_asset_ids?: string[]
@@ -96,7 +96,7 @@ export interface EditOperation {
 }
 
 export interface EditPlan {
-  mode: 'explicit' | 'auto'
+  mode: 'auto'
   domain: 'portrait' | 'landscape' | 'food' | 'document' | 'general'
   executor: 'deterministic' | 'generative' | 'hybrid'
   preserve: string[]
@@ -120,8 +120,10 @@ export interface EvaluationReport {
   issues: string[]
   warnings: string[]
   summary: string
-  should_continue_editing: boolean
-  should_request_review: boolean
+  decision: ReviewDecision
+  next_focus?: FocusKey | null
+  correction_objective: string
+  decision_reason: string
 }
 
 export interface ObjectiveGap {
@@ -137,6 +139,7 @@ export interface ObjectiveGap {
 
 export interface RequestGoal {
   kind: string
+  focus: FocusKey
   target_region: string
   priority: number
   intensity?: number | null
@@ -145,7 +148,7 @@ export interface RequestGoal {
 }
 
 export interface ObjectiveCard {
-  mode: 'auto' | 'explicit'
+  mode: 'auto'
   domain: string
   summary: string
   goals: RequestGoal[]
@@ -158,7 +161,7 @@ export interface CandidateProgram {
   id: string
   label: string
   focus: FocusKey
-  source: 'model' | 'rule' | 'variant' | 'noop' | 'direct' | 'recovery'
+  source: 'model' | 'rule' | 'variant' | 'noop' | 'recovery'
   summary: string
   steps: EditOperation[]
   is_recovery?: boolean

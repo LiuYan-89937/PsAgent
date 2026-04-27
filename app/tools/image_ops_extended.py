@@ -172,7 +172,7 @@ def apply_skin_smooth(
     saturation = hsv[:, :, 1] / 255.0
     sat_gate = np.clip(1.0 - saturation * saturation_protection, 0.46, 1.0).astype(np.float32)
     smooth_gate = np.clip(structure_gate * sat_gate, 0.0, 1.0)
-    smooth_alpha = np.clip(smooth_strength * 0.42, 0.0, 0.42)
+    smooth_alpha = np.clip(smooth_strength * 0.3, 0.0, 0.3)
     adjusted = np.clip(
         image_float * (1.0 - smooth_alpha * smooth_gate[:, :, None]) + smoothed * (smooth_alpha * smooth_gate[:, :, None]),
         0.0,
@@ -312,11 +312,11 @@ def apply_regional_enhancement(
             shadow_gate = shadows_mask(luminance, 0.62)
             midtone_gate = midtones_mask(luminance, 0.84)
             highlight_hold = 1.0 - highlights_mask(luminance, 0.26 + highlight_protection * 0.24)
-            lift = (shadow_gate * 1.02 + midtone_gate * 0.7) * exposure_boost
+            lift = (shadow_gate * 0.82 + midtone_gate * 0.58) * exposure_boost
             luminance = np.clip(
                 luminance
-                + (1.0 - luminance) * lift * 0.62 * highlight_hold
-                + exposure_boost * midtone_gate * 0.05,
+                + (1.0 - luminance) * lift * 0.46 * highlight_hold
+                + exposure_boost * midtone_gate * 0.026,
                 0.0,
                 1.0,
             )
@@ -332,11 +332,11 @@ def apply_regional_enhancement(
         lab = rgb_to_lab_float(adjusted_rgb)
         luminance = np.clip(lab[:, :, 0] / 100.0, 0.0, 1.0)
         if warmth_shift != 0.0:
-            lab[:, :, 2] = np.clip(lab[:, :, 2] + warmth_shift * 9.5, -127.0, 127.0)
-            lab[:, :, 1] = np.clip(lab[:, :, 1] + warmth_shift * 2.2, -127.0, 127.0)
+            lab[:, :, 2] = np.clip(lab[:, :, 2] + warmth_shift * 6.0, -127.0, 127.0)
+            lab[:, :, 1] = np.clip(lab[:, :, 1] + warmth_shift * 1.4, -127.0, 127.0)
         if shadow_lift != 0.0:
             shadow_gate = shadows_mask(luminance, 0.52)
-            lab[:, :, 0] = np.clip(lab[:, :, 0] + shadow_gate * shadow_lift * 13.0, 0.0, 100.0)
+            lab[:, :, 0] = np.clip(lab[:, :, 0] + shadow_gate * shadow_lift * 8.0, 0.0, 100.0)
         adjusted_rgb = lab_float_to_rgb(lab)
 
     if smooth_amount > 0.0:
@@ -349,7 +349,7 @@ def apply_regional_enhancement(
         luminance = cv2.cvtColor((adjusted_rgb * 255.0).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)[:, :, 0] / 255.0
         highlight_gate = 1.0 - highlights_mask(luminance, 0.28 + highlight_protection * 0.18)
         smooth_gate = np.clip(structure_gate * highlight_gate, 0.0, 1.0)
-        smooth_alpha = np.clip(smooth_amount * 0.28, 0.0, 0.28)
+        smooth_alpha = np.clip(smooth_amount * 0.18, 0.0, 0.18)
         adjusted_rgb = np.clip(
             adjusted_rgb * (1.0 - smooth_alpha * smooth_gate[:, :, None]) + smoothed * (smooth_alpha * smooth_gate[:, :, None]),
             0.0,
@@ -361,7 +361,7 @@ def apply_regional_enhancement(
         local = cv2.GaussianBlur(luminance, (0, 0), sigmaX=1.0 + clarity_boost * 2.6, sigmaY=1.0 + clarity_boost * 2.6)
         detail = luminance - local
         highlight_gate = 1.0 - highlights_mask(luminance, 0.34 + highlight_protection * 0.2)
-        amount = clarity_boost * 0.28 + sharpen_amount * 0.42
+        amount = clarity_boost * 0.18 + sharpen_amount * 0.26
         new_l = np.clip(luminance + detail * amount * highlight_gate, 0.0, 1.0)
         lab = cv2.cvtColor((adjusted_rgb * 255.0).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
         lab[:, :, 0] = new_l * 255.0
@@ -579,7 +579,7 @@ def apply_vignette(
     feather = float(np.clip(feather, 0.05, 1.0))
     gate = np.clip((radius - midpoint) / max(1.0 - midpoint, 1e-6), 0.0, 1.0)
     gate = np.power(gate, 1.0 / feather)
-    factor = 1.0 - gate * amount * 0.6
+    factor = 1.0 - gate * amount * 0.34
     adjusted = np.clip(image_float * factor[:, :, None], 0.0, 1.0)
     mask_np = prepare_blend_mask_np(mask_path, (width, height), feather_radius=feather_radius)
     return _blend_and_save(image_float, adjusted, output_path, mask_np=mask_np)
@@ -677,7 +677,14 @@ def apply_color_grading(
         + midtone_color[None, None, :] * midtone_gate[:, :, None] * midtone_saturation
         + highlight_color[None, None, :] * highlight_gate[:, :, None] * highlight_saturation
     )
-    adjusted = np.clip(image_float * (1.0 - blending * 0.18) + tint * blending * 0.18 + image_float, 0.0, 1.0)
+    tone_weight = np.clip(
+        shadow_gate * shadow_saturation + midtone_gate * midtone_saturation + highlight_gate * highlight_saturation,
+        0.0,
+        1.0,
+    )
+    neutral = np.ones_like(image_float) * 0.5 * tone_weight[:, :, None]
+    color_delta = (tint - neutral) * blending * 0.22
+    adjusted = np.clip(image_float + color_delta, 0.0, 1.0)
     mask_np = prepare_blend_mask_np(mask_path, (image_rgb.shape[1], image_rgb.shape[0]), feather_radius=feather_radius)
     return _blend_and_save(image_float, adjusted, output_path, mask_np=mask_np)
 
@@ -697,14 +704,14 @@ def apply_lut_preset(
     preset_name = str(preset or "clean_portrait").strip().lower()
     adjusted = image_float.copy()
     if preset_name == "warm_film":
-        adjusted = np.clip(adjusted * np.array([1.04, 1.0, 0.95], dtype=np.float32), 0.0, 1.0)
-        adjusted = np.clip(adjusted + 0.02, 0.0, 1.0)
+        adjusted = np.clip(adjusted * np.array([1.03, 1.0, 0.965], dtype=np.float32), 0.0, 1.0)
+        adjusted = np.clip(adjusted + 0.014, 0.0, 1.0)
     elif preset_name == "cool_fade":
-        adjusted = np.clip(adjusted * np.array([0.98, 1.0, 1.05], dtype=np.float32), 0.0, 1.0)
-        adjusted = np.clip(0.06 + adjusted * 0.94, 0.0, 1.0)
+        adjusted = np.clip(adjusted * np.array([0.985, 1.0, 1.035], dtype=np.float32), 0.0, 1.0)
+        adjusted = np.clip(0.035 + adjusted * 0.965, 0.0, 1.0)
     else:
-        adjusted = np.clip(adjusted * np.array([1.01, 1.0, 0.99], dtype=np.float32), 0.0, 1.0)
-        adjusted = np.clip(adjusted + 0.015, 0.0, 1.0)
+        adjusted = np.clip(adjusted * np.array([1.012, 1.0, 0.988], dtype=np.float32), 0.0, 1.0)
+        adjusted = np.clip(adjusted + 0.012, 0.0, 1.0)
 
     mixed = np.clip(image_float * (1.0 - strength) + adjusted * strength, 0.0, 1.0)
     mask_np = prepare_blend_mask_np(mask_path, (image_rgb.shape[1], image_rgb.shape[0]), feather_radius=feather_radius)

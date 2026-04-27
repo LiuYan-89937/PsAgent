@@ -46,7 +46,7 @@ class SegmentationToolsTest(unittest.TestCase):
             api_chain=(provider,),
         )
 
-    def test_ensure_region_mask_uses_fal_when_prompt_present_in_auto_mode(self) -> None:
+    def test_ensure_region_mask_uses_fal_when_prompt_present_in_search_mode(self) -> None:
         with patch.dict(
             os.environ,
             {PSAGENT_SEGMENTATION_PROVIDER_ENV: "auto"},

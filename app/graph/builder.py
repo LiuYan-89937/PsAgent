@@ -17,10 +17,10 @@ from app.graph.state import EditState, GraphInputState, GraphOutputState
 def route_after_final_review(state: EditState) -> str:
     """Route after final review, allowing bounded auto continuation."""
 
-    if state.get("approval_required"):
-        return "review"
     if state.get("needs_search_continuation"):
         return "continue"
+    if state.get("approval_required"):
+        return "review"
     return "ok"
 
 

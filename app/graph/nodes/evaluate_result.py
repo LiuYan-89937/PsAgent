@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -16,6 +17,7 @@ from app.graph.state import (
     FocusKey,
     ObjectiveCard,
     ObjectiveGap,
+    ReviewDecision,
     coerce_approval_payload,
     coerce_edit_plan,
     coerce_execution_trace,
@@ -27,25 +29,27 @@ from app.services.image_metrics import compute_image_metrics
 from app.services.critic_model import critic_model_available, evaluate_edit_result
 from app.services.search_agent.config import resolve_search_round_limits
 
-UNDERDONE_REVIEW_TOKENS = (
-    "过于保守",
-    "幅度过小",
-    "幅度不够",
-    "未达到",
-    "没有达到",
-    "仍偏暗",
-    "偏暗",
-    "不够亮",
-    "建议加大",
-    "建议加强",
-    "需要加大",
-    "需要加强",
-    "不足",
-)
 
-SUBJECT_TOKENS = ("人物", "主体", "面部", "脸", "人像", "person", "subject", "face")
-BRIGHTNESS_TOKENS = ("偏暗", "曝光", "提亮", "亮度", "bright", "exposure")
-SKIN_TOKENS = ("肤色", "皮肤", "质感", "skin", "texture")
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _set_structured_decision(
+    report: dict[str, Any],
+    *,
+    decision: ReviewDecision,
+    reason: str,
+    next_focus: FocusKey | None = None,
+    correction_objective: str = "",
+) -> None:
+    report["decision"] = decision
+    report["decision_reason"] = reason
+    report["next_focus"] = next_focus
+    report["correction_objective"] = correction_objective
 
 
 def _safe_image_analysis(state: EditState):
@@ -79,18 +83,42 @@ def _build_base_report(state: EditState) -> dict[str, Any]:
         "failure_count": sum(1 for item in execution_trace if item.get("ok") is False),
         "fallback_count": sum(1 for item in execution_trace if item.get("fallback_used")),
         "has_output": bool(state.get("selected_output")),
+        "decision": "accept",
+        "next_focus": None,
+        "correction_objective": "",
+        "decision_reason": "execution facts did not require routing intervention",
     }
     input_images = list(state.get("input_images") or [])
     selected_output = state.get("selected_output")
     if input_images and selected_output and Path(str(input_images[0])).exists() and Path(str(selected_output)).exists():
-        # 最终质检补一层确定性前后对比，专门捕捉“自动美化过头”这类模型 critic 可能漏掉的问题。
-        original_metrics = compute_image_metrics(str(input_images[0]))
-        edited_metrics = compute_image_metrics(str(selected_output))
+        original_path = Path(str(input_images[0]))
+        edited_path = Path(str(selected_output))
+        original_metrics = compute_image_metrics(str(original_path))
+        edited_metrics = compute_image_metrics(str(edited_path))
         warnings: list[str] = []
         brightness_delta = edited_metrics["brightness_mean"] - original_metrics["brightness_mean"]
         shadow_drop = original_metrics["shadow_ratio"] - edited_metrics["shadow_ratio"]
         highlight_delta = edited_metrics["highlight_ratio"] - original_metrics["highlight_ratio"]
         saturation_delta = edited_metrics["saturation_mean"] - original_metrics["saturation_mean"]
+        local_contrast_delta = abs(float(edited_metrics.get("local_contrast_mean", 0.0)) - float(original_metrics.get("local_contrast_mean", 0.0)))
+        same_file = original_path.resolve() == edited_path.resolve()
+        same_bytes = False if same_file else original_path.stat().st_size == edited_path.stat().st_size and _file_digest(original_path) == _file_digest(edited_path)
+        visually_unchanged = (
+            abs(brightness_delta) < 0.6
+            and abs(saturation_delta) < 0.004
+            and abs(highlight_delta) < 0.003
+            and abs(shadow_drop) < 0.003
+            and local_contrast_delta < 0.003
+        )
+        if same_file or same_bytes or visually_unchanged:
+            warnings.append("输出与原图几乎一致，修图流程未产生有效修改。")
+            _set_structured_decision(
+                report,
+                decision="continue_auto",
+                next_focus="global_tone",
+                correction_objective="输出与原图几乎一致，重新生成有效的曝光、色调和主体可读性调整。",
+                reason="deterministic unchanged-output guard",
+            )
         if brightness_delta > 18.0 and shadow_drop > 0.08:
             warnings.append("输出黑位被明显抬高，可能出现暗部发灰或原图氛围丢失。")
         if brightness_delta > 16.0 and saturation_delta < -0.03:
@@ -99,7 +127,12 @@ def _build_base_report(state: EditState) -> dict[str, Any]:
             warnings.append("输出高光面积明显扩大，可能存在高光扩散或白场过推。")
         if warnings:
             report["warnings"] = warnings
-            report["should_request_review"] = True
+            if report.get("decision") == "accept":
+                _set_structured_decision(
+                    report,
+                    decision="request_human_review",
+                    reason="deterministic quality guard found a risk that lacks an automatic correction objective",
+                )
     return report
 
 
@@ -131,38 +164,23 @@ def _run_critic(state: EditState) -> tuple[CriticResult | None, str | None]:
     return CriticResult.model_validate(model_report), None
 
 
-def _review_text(report_payload: dict[str, Any]) -> str:
-    parts: list[str] = []
-    for key in ("summary",):
-        value = report_payload.get(key)
-        if isinstance(value, str):
-            parts.append(value)
-    for key in ("issues", "warnings"):
-        value = report_payload.get(key)
-        if isinstance(value, list):
-            parts.extend(str(item) for item in value)
-    return "\n".join(parts)
+def _auto_should_continue_before_review(
+    *,
+    state: EditState,
+    report_payload: dict[str, Any],
+    cycle_round_count: int,
+    min_rounds: int,
+    max_rounds: int,
+) -> bool:
+    """Keep auto search moving before sending uncertain quality reviews to humans."""
 
-
-def _needs_continuation(report_payload: dict[str, Any]) -> bool:
-    """Return whether final review should drive one more search round."""
-
-    if bool(report_payload.get("should_continue_editing")):
+    if cycle_round_count >= max_rounds:
+        return False
+    if report_payload.get("decision") == "continue_auto":
         return True
-    text = _review_text(report_payload)
-    return any(token in text for token in UNDERDONE_REVIEW_TOKENS)
-
-
-def _continuation_focus(text: str) -> FocusKey:
-    """Choose the next corrective focus from final review language."""
-
-    if any(token in text for token in SUBJECT_TOKENS) and any(token in text for token in BRIGHTNESS_TOKENS):
-        return "subject_separation"
-    if any(token in text for token in SKIN_TOKENS):
-        return "subject_cleanup"
-    if any(token in text for token in ("细节", "收尾", "完成度", "detail", "finish")):
-        return "finish"
-    return "global_tone"
+    if report_payload.get("decision") == "request_human_review":
+        return cycle_round_count < min_rounds
+    return False
 
 
 def _append_continuation_gap(state: EditState, report_payload: dict[str, Any]) -> ObjectiveCard | None:
@@ -171,15 +189,15 @@ def _append_continuation_gap(state: EditState, report_payload: dict[str, Any]) -
     objective = coerce_objective_card(state.get("objective_card"))
     if objective is None:
         return None
-    text = _review_text(report_payload)
-    focus = _continuation_focus(text)
+    text = str(report_payload.get("correction_objective") or report_payload.get("summary") or "Final review requested one more corrective round.").strip()
+    focus = report_payload.get("next_focus") or "global_tone"
     gap = ObjectiveGap(
         id=f"final_review_{focus}_{uuid4().hex[:8]}",
-        focus=focus,
-        description=text.strip() or "Final review requested one more corrective round.",
+        focus=focus,  # type: ignore[arg-type]
+        description=text,
         priority=96,
         target_region="person area" if focus == "subject_separation" else "face and skin area" if focus == "subject_cleanup" else "whole_image",
-        desired_delta=text.strip(),
+        desired_delta=text,
         constraints=["final_review_continuation"],
     )
     updated_gaps = list(objective.gaps)
@@ -200,7 +218,7 @@ def final_review(state: EditState) -> dict[str, Any]:
 
     base_report = _build_base_report(state)
     deterministic_warnings = list(base_report.get("warnings") or [])
-    deterministic_review_required = bool(base_report.get("should_request_review"))
+    deterministic_decision = base_report.get("decision")
     critic, critic_error = _run_critic(state)
     fallback_trace = list(state.get("fallback_trace") or [])
     if critic is not None:
@@ -210,7 +228,12 @@ def final_review(state: EditState) -> dict[str, Any]:
             if warning not in merged_warnings:
                 merged_warnings.append(warning)
         base_report["warnings"] = merged_warnings
-        base_report["should_request_review"] = bool(base_report.get("should_request_review")) or deterministic_review_required
+        if deterministic_decision == "request_human_review" and base_report.get("decision") == "accept":
+            _set_structured_decision(
+                base_report,
+                decision="request_human_review",
+                reason="deterministic quality guard found a risk that the critic did not route",
+            )
     elif critic_error:
         fallback_trace = append_fallback_trace(
             fallback_trace,
@@ -226,20 +249,26 @@ def final_review(state: EditState) -> dict[str, Any]:
     rounds = coerce_search_rounds(state.get("rounds") or [])
     round_limits = resolve_search_round_limits(state.get("search_effort"))
     cycle_round_count = _cycle_round_count(state, rounds)
-    continuation_requested = (
-        str(state.get("mode") or "explicit") == "auto"
-        and cycle_round_count < round_limits.max_rounds
-        and _needs_continuation(base_report)
+    continuation_candidate = _auto_should_continue_before_review(
+        state=state,
+        report_payload=base_report,
+        cycle_round_count=cycle_round_count,
+        min_rounds=round_limits.min_rounds,
+        max_rounds=round_limits.max_rounds,
     )
-    objective_update = _append_continuation_gap(state, base_report) if continuation_requested else None
+    objective_update = _append_continuation_gap(state, base_report) if continuation_candidate else None
+    continuation_requested = objective_update is not None
 
     max_rounds_exhausted = (
-        str(state.get("mode") or "explicit") == "auto"
-        and cycle_round_count >= round_limits.max_rounds
-        and _needs_continuation(base_report)
+        cycle_round_count >= round_limits.max_rounds
+        and base_report.get("decision") in {"continue_auto", "request_human_review"}
     )
     if max_rounds_exhausted:
-        base_report["should_request_review"] = True
+        _set_structured_decision(
+            base_report,
+            decision="request_human_review",
+            reason="auto search reached max rounds before the structured critic decision could be satisfied",
+        )
 
     report = EvaluationReport.model_validate(base_report)
     memory_candidates: list[dict[str, Any]] = []
@@ -268,7 +297,8 @@ def final_review(state: EditState) -> dict[str, Any]:
         "final_review": report,
         "needs_search_continuation": continuation_requested,
         "search_continuation_reason": report.summary if continuation_requested else None,
-        "approval_required": bool(state.get("approval_required")) or bool(report.should_request_review),
+        "approval_required": bool(state.get("approval_required"))
+        or (report.decision == "request_human_review" and not continuation_requested),
         "approval_payload": approval_payload,
         "fallback_trace": fallback_trace,
         "memory_write_candidates": memory_candidates,

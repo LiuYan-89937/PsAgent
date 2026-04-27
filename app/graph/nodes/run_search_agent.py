@@ -11,7 +11,6 @@ from app.graph.state import (
     coerce_edit_plan,
     coerce_execution_trace,
     coerce_mask_catalog,
-    coerce_request_intent,
     coerce_search_rounds,
     coerce_segmentation_trace,
 )
@@ -27,7 +26,7 @@ def _safe_stream_writer():
 
 
 def run_search_agent(state: EditState) -> dict[str, object]:
-    """Execute explicit direct mode or auto search-first orchestration."""
+    """Execute search-first orchestration."""
 
     input_images = list(state.get("input_images") or [])
     current_image = str(state.get("selected_output") or (input_images[0] if input_images else ""))
@@ -42,29 +41,22 @@ def run_search_agent(state: EditState) -> dict[str, object]:
     existing_final_execution_trace = coerce_execution_trace(state.get("final_execution_trace") or state.get("execution_trace") or [])
     existing_segmentation_trace = coerce_segmentation_trace(state.get("segmentation_trace") or [])
     existing_fallback_trace = list(state.get("fallback_trace") or [])
-    mode = str(state.get("mode") or "explicit")
-    round_offset = len(existing_rounds) if mode == "auto" else 0
+    round_offset = len(existing_rounds)
     cycle_round_offset = 0
-    if mode == "auto":
-        round_limits = resolve_search_round_limits(state.get("search_effort"))
-        if state.get("human_review_continuation") and not state.get("search_cycle_round_offset"):
-            cycle_round_offset = len(existing_rounds)
-        else:
-            try:
-                cycle_round_offset = int(state.get("search_cycle_round_offset") or 0)
-            except (TypeError, ValueError):
-                cycle_round_offset = 0
-        cycle_round_count = max(len(existing_rounds) - max(cycle_round_offset, 0), 0)
-        remaining_rounds = max(round_limits.max_rounds - cycle_round_count, 0)
-        remaining_min_rounds = max(round_limits.min_rounds - cycle_round_count, 0)
+    round_limits = resolve_search_round_limits(state.get("search_effort"))
+    if state.get("human_review_continuation") and not state.get("search_cycle_round_offset"):
+        cycle_round_offset = len(existing_rounds)
     else:
-        remaining_rounds = None
-        remaining_min_rounds = None
+        try:
+            cycle_round_offset = int(state.get("search_cycle_round_offset") or 0)
+        except (TypeError, ValueError):
+            cycle_round_offset = 0
+    cycle_round_count = max(len(existing_rounds) - max(cycle_round_offset, 0), 0)
+    remaining_rounds = max(round_limits.max_rounds - cycle_round_count, 0)
+    remaining_min_rounds = max(round_limits.min_rounds - cycle_round_count, 0)
     result = run_search_first_agent(
         input_image_path=current_image,
         objective=objective,
-        request_intent=coerce_request_intent(state.get("request_intent")),
-        mode=mode,
         mask_catalog=coerce_mask_catalog(state.get("mask_catalog")),
         tool_catalog=[item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item) for item in state.get("tool_catalog") or []],
         writer=_safe_stream_writer(),

@@ -14,7 +14,7 @@ from app.tools.image_ops import apply_vignette
 @tool
 def adjust_vignette(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    amount: Annotated[float, Field(default=0.5, ge=-1.0, le=1.0)] = 0.5,
+    amount: Annotated[float, Field(default=0.22, ge=-1.0, le=1.0)] = 0.22,
     midpoint: Annotated[float, Field(default=0.5, ge=0.15, le=0.95)] = 0.5,
     roundness: Annotated[float, Field(default=0.5, ge=0.0, le=1.0)] = 0.5,
     feather: Annotated[float, Field(default=0.5, ge=0.05, le=1.0)] = 0.5,
@@ -57,7 +57,7 @@ ADJUST_VIGNETTE_SPEC = ToolSpec(
     focus_affinity=["finish"],
     supports_mask=True,
     supports_whole_image=True,
-    default_params={"amount": 0.5, "midpoint": 0.5, "roundness": 0.5, "feather": 0.5, "feather_radius": 18.0},
+    default_params={"amount": 0.22, "midpoint": 0.5, "roundness": 0.5, "feather": 0.5, "feather_radius": 18.0},
     planner_schema=build_planner_schema(adjust_vignette, supports_mask=True, mask_schema=MASK_PARAMS_SCHEMA, excluded_fields={"image_path", "mask_path"}),
     primary_param="amount",
     risk_level="low",

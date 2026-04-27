@@ -72,7 +72,26 @@ def build_round_guidance_payload(
         "候选限制": {
             "candidate_count": candidate_count,
             "max_steps_per_candidate": max_steps,
+            "min_steps_per_non_stop_candidate": 1 if is_recovery else 2,
             "allow_zero_step_candidate": True,
+            "zero_step_candidate_usage": "只在当前轮确实不应继续处理或无法安全处理时使用",
+        },
+        "自然修图策略": {
+            "non_stop_candidate_policy": "普通候选必须是互补工具链，不要只给单个工具。",
+            "chain_shape": "优先组合 2-3 个轻量步骤，例如影调塑形 + 色彩清理 + 细节/收口；recovery 最多 2 步。",
+            "parameter_style": "用中低强度多步骤叠加，不用单工具大幅度推进。",
+            "avoid_tool_patterns": [
+                "不要连续堆叠多个同类强曝光或强锐化工具",
+                "不要用重磨皮替代肤色清理",
+                "不要用强 LUT 或强滤镜覆盖真实光影",
+                "不要为了提亮而抬灰背景暗部或炸掉白裙/水珠高光",
+            ],
+            "preferred_tool_patterns": [
+                "整体亮度优先考虑 adjust_brightness / adjust_midtones / adjust_highlights_shadows / adjust_curves 的组合",
+                "人像肤色优先考虑 adjust_skin_brightness + adjust_face_color_cleanup / adjust_skin_tone_balance",
+                "水珠、发丝、织物细节优先轻量使用 adjust_texture / adjust_clarity / adjust_sharpness，并开启高光或噪声保护参数",
+                "清透风格优先用 adjust_vibrance_saturation / adjust_temperature_tint / adjust_neutral_clean_tone 做轻量校正",
+            ],
         },
         "工具目录": compact_tool_catalog_for_model(tool_catalog, include_params=True),
         "共享遮罩参数": shared_mask_params_for_model(tool_catalog),

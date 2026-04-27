@@ -28,15 +28,7 @@ def _gap(
 
 
 def _focus_for_goal(goal: RequestGoal) -> FocusKey:
-    kind = goal.kind.lower()
-    region = goal.target_region.lower()
-    if any(token in kind for token in ("skin", "face", "hair", "teeth", "lips")):
-        return "subject_cleanup"
-    if "background" in kind or "subject" in region or "person" in region or "background" in region:
-        return "subject_separation"
-    if any(token in kind for token in ("finish", "style", "detail", "noise")):
-        return "finish"
-    return "global_tone"
+    return goal.focus or "global_tone"
 
 
 def _issue_gaps(image_analysis: AnalyzeImageResult | None) -> list[ObjectiveGap]:
@@ -86,7 +78,7 @@ def build_objective_card(
 ) -> ObjectiveCard:
     """Build a compact objective card for round search."""
 
-    effective_mode = "auto" if mode == "auto" else "explicit"
+    effective_mode = "auto"
     domain = image_analysis.domain if image_analysis is not None else "general"
     goals = list(request_intent.goals if request_intent is not None else [])
     constraints = list(request_intent.constraints if request_intent is not None else [])

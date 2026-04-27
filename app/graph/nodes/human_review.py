@@ -5,18 +5,21 @@ from __future__ import annotations
 from uuid import uuid4
 
 from langgraph.types import interrupt
+from pydantic import ValidationError
 
-from app.graph.state import ApprovalPayload, EditState, FocusKey, ObjectiveCard, ObjectiveGap, coerce_objective_card
+from app.graph.state import (
+    ApprovalPayload,
+    EditState,
+    FocusKey,
+    ObjectiveCard,
+    ObjectiveGap,
+    coerce_eval_report,
+    coerce_objective_card,
+)
 from app.services.search_agent.config import normalize_search_effort
 
 
 ACCEPT_FINAL_NOTES = {"ok", "okay", "pass", "approve", "approved", "通过", "确认", "可以", "没问题"}
-SUBJECT_TOKENS = ("人物", "主体", "面部", "脸", "人像", "person", "subject", "face")
-BACKGROUND_TOKENS = ("背景", "暗部", "黑位", "氛围", "反差", "高反差", "background", "shadow", "contrast")
-HIGHLIGHT_TOKENS = ("高光", "过曝", "白裙", "白场", "压高光", "highlight", "overexposed", "white")
-BRIGHTNESS_TOKENS = ("提亮", "曝光", "亮度", "偏暗", "更亮", "bright", "exposure")
-SKIN_TOKENS = ("肤色", "皮肤", "磨皮", "塑料感", "skin", "texture")
-DETAIL_TOKENS = ("水珠", "细节", "锐度", "清晰", "detail", "droplet", "clarity")
 
 
 def _clean_note(value: object) -> str:
@@ -31,7 +34,9 @@ def _is_accept_final_note(note: str) -> bool:
 def _continuation_instruction(*, note: str, payload: ApprovalPayload) -> str:
     """Choose the text that should steer a human-requested follow-up round."""
 
-    if note and not _is_accept_final_note(note):
+    if note and _is_accept_final_note(note):
+        return ""
+    if note:
         return note
     for value in (payload.suggested_action, payload.summary):
         text = _clean_note(value)
@@ -40,20 +45,16 @@ def _continuation_instruction(*, note: str, payload: ApprovalPayload) -> str:
     return ""
 
 
-def _focus_from_instruction(text: str) -> FocusKey:
-    lowered = text.lower()
-    has_subject = any(token in lowered or token in text for token in SUBJECT_TOKENS)
-    has_background = any(token in lowered or token in text for token in BACKGROUND_TOKENS)
-    has_highlight = any(token in lowered or token in text for token in HIGHLIGHT_TOKENS)
-    has_brightness = any(token in lowered or token in text for token in BRIGHTNESS_TOKENS)
-    if has_subject and (has_background or has_brightness):
-        return "subject_separation"
-    if has_background or has_highlight:
-        return "global_tone"
-    if any(token in lowered or token in text for token in SKIN_TOKENS):
-        return "subject_cleanup"
-    if any(token in lowered or token in text for token in DETAIL_TOKENS):
-        return "finish"
+def _structured_followup_focus(state: EditState) -> FocusKey:
+    """Use the critic's structured focus when available; never infer it from text."""
+
+    for key in ("final_review", "eval_report"):
+        try:
+            report = coerce_eval_report(state.get(key))
+        except ValidationError:
+            report = None
+        if report is not None and report.next_focus:
+            return report.next_focus
     return "global_tone"
 
 
@@ -73,7 +74,7 @@ def _append_human_continuation_gap(state: EditState, instruction: str) -> Object
         mode="auto",
         domain="general",
     )
-    focus = _focus_from_instruction(instruction)
+    focus = _structured_followup_focus(state)
     gap = ObjectiveGap(
         id=f"human_review_{focus}_{uuid4().hex[:8]}",
         focus=focus,

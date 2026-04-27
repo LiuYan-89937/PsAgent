@@ -25,21 +25,21 @@ def adjust_contrast(
     strength: Annotated[
         float,
         Field(
-            default=0.5,
+            default=0.28,
             ge=0.0,
             le=1.0,
             description="Primary contrast push strength. 0.2=light visible, 0.5=obvious, 0.8=strong.",
         ),
-    ] = 0.5,
+    ] = 0.28,
     contrast_scale: Annotated[
         float,
         Field(
-            default=1.0,
+            default=0.8,
             ge=0.25,
             le=1.5,
             description="Scaling factor that maps the primary strength into LAB luminance contrast.",
         ),
-    ] = 1.0,
+    ] = 0.8,
     pivot: Annotated[
         float,
         Field(
@@ -73,8 +73,8 @@ def adjust_contrast(
         mask_path=mask_path,
         feather_radius=feather_radius,
         pivot=pivot,
-        protect_highlights=0.22,
-        protect_shadows=0.22,
+        protect_highlights=0.32,
+        protect_shadows=0.32,
     )
     return ToolExecutionResult(
         ok=True,
@@ -110,8 +110,8 @@ ADJUST_CONTRAST_SPEC = ToolSpec(
     supports_mask=True,
     supports_whole_image=True,
     default_params={
-        "strength": 0.5,
-        "contrast_scale": 1.0,
+        "strength": 0.28,
+        "contrast_scale": 0.8,
         "pivot": 0.5,
         "feather_radius": 18.0,
     },

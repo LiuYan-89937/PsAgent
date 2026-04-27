@@ -14,9 +14,9 @@ from app.tools.image_ops import apply_clarity_adjustment
 @tool
 def adjust_local_contrast(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    amount: Annotated[float, Field(default=0.5, ge=-1.0, le=1.0, description="Local contrast amount.")] = 0.5,
+    amount: Annotated[float, Field(default=0.24, ge=-1.0, le=1.0, description="Local contrast amount.")] = 0.24,
     radius: Annotated[float, Field(default=16.0, ge=1.0, le=48.0, description="Local contrast radius.")] = 16.0,
-    edge_protection: Annotated[float, Field(default=0.2, ge=0.0, le=0.85, description="Protection on extremes and edges.")] = 0.2,
+    edge_protection: Annotated[float, Field(default=0.38, ge=0.0, le=0.85, description="Protection on extremes and edges.")] = 0.38,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0, description="Mask feather radius.")] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -57,9 +57,9 @@ ADJUST_LOCAL_CONTRAST_SPEC = ToolSpec(
     supports_mask=True,
     supports_whole_image=True,
     default_params={
-        "amount": 0.5,
+        "amount": 0.24,
         "radius": 16.0,
-        "edge_protection": 0.2,
+        "edge_protection": 0.38,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

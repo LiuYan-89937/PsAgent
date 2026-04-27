@@ -11,7 +11,6 @@ router = APIRouter(prefix="/meta", tags=["meta"])
 
 
 @router.get("/tools", response_model=ToolCatalogResponse)
-@router.get("/packages", response_model=ToolCatalogResponse)
 async def list_tools(
     tool_catalog: tuple[dict, ...] = Depends(get_tool_catalog),
 ) -> ToolCatalogResponse:

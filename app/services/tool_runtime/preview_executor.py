@@ -6,6 +6,7 @@ from PIL import Image
 
 from app.graph.state import CandidateProgram, MaskCatalog
 from app.services.tool_runtime.chain_executor import ChainExecutionResult, execute_chain
+from app.services.tool_runtime.mask_runtime import ensure_mask_size_for_image
 from app.tools.common.tool_utils import temp_output_path
 
 
@@ -29,27 +30,16 @@ def _preview_image_path(image_path: str) -> str:
     return output_path
 
 
-def _scaled_mask_path(mask_path: str, *, target_size: tuple[int, int]) -> str:
-    """Scale one cached mask down to preview size."""
-
-    mask = Image.open(mask_path).convert("L")
-    resized = mask.resize(target_size, Image.Resampling.BILINEAR)
-    output_path = temp_output_path("psagent_preview_mask_")
-    resized.save(output_path)
-    return output_path
-
-
 def _preview_mask_catalog(mask_catalog: MaskCatalog, *, preview_image_path: str) -> MaskCatalog:
     """Build a preview-sized mask catalog from full-resolution cached masks."""
 
-    target_size = Image.open(preview_image_path).convert("RGB").size
     items = {}
     for signature, item in mask_catalog.items.items():
         if not item.mask_path:
             continue
         items[signature] = item.model_copy(
             update={
-                "mask_path": _scaled_mask_path(item.mask_path, target_size=target_size),
+                "mask_path": ensure_mask_size_for_image(item.mask_path, preview_image_path),
                 "preview_path": None,
             }
         )

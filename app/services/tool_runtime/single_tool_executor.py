@@ -23,6 +23,7 @@ from app.services.planner_param_codec import (
     strip_runtime_mask_params,
 )
 from app.services.tool_runtime.mask_runtime import (
+    ensure_mask_size_for_image,
     evaluate_generated_mask,
     generate_mask,
     normalized_mask_signature,
@@ -261,6 +262,10 @@ def _mask_options(call: PreparedToolCall) -> dict[str, Any]:
         "prompt": call.mask_params.get("mask_prompt") or call.region,
         "negative_prompt": call.mask_params.get("mask_negative_prompt"),
         "semantic_type": bool(call.mask_params.get("mask_semantic_type", False)),
+        "fill_holes": bool(call.mask_params.get("mask_fill_holes", False)),
+        "expand_mask": int(call.mask_params.get("mask_expand") or 0),
+        "blur_mask": bool(call.mask_params.get("mask_blur", False)),
+        "use_grounding_dino": bool(call.mask_params.get("mask_use_grounding_dino", False)),
         "revert_mask": bool(call.mask_params.get("mask_revert", False)),
     }
 
@@ -296,6 +301,7 @@ def _resolve_cached_mask(
             skip_status={"op": call.op_name, "ok": False, "fallback_used": True, "error": "rejected cached mask"},
         )
 
+    reusable_mask_path = ensure_mask_size_for_image(entry.mask_path, ctx.current_image)
     updated_catalog = record_mask_catalog_item(
         mask_catalog,
         signature=signature,
@@ -303,11 +309,11 @@ def _resolve_cached_mask(
         focus=ctx.focus,
         op_name=call.op_name,
         region_label=call.region,
-        mask_path=entry.mask_path,
+        mask_path=reusable_mask_path,
         preview_path=entry.preview_path,
         quality=entry.quality,
     )
-    return MaskResolution(mask_path=entry.mask_path, mask_catalog=updated_catalog)
+    return MaskResolution(mask_path=reusable_mask_path, mask_catalog=updated_catalog)
 
 
 def _record_segmentation_failure(

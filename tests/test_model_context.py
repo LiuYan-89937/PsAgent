@@ -36,7 +36,7 @@ class ModelContextTest(unittest.TestCase):
 
         exposure = next(item for item in compact_catalog if item["name"] == "adjust_exposure")
         strength = next(item for item in exposure["params"] if item["name"] == "strength")
-        teeth = next(item for item in compact_catalog if item["name"] == "adjust_teeth_whiten")
+        skin_smooth = next(item for item in compact_catalog if item["name"] == "adjust_skin_smooth")
 
         self.assertEqual(exposure["execution_modes"], ["whole_image", "masked_region"])
         self.assertEqual(strength["type"], "integer")
@@ -44,8 +44,8 @@ class ModelContextTest(unittest.TestCase):
         self.assertEqual(strength["minimum"], 0)
         self.assertEqual(strength["maximum"], 100)
         self.assertIn("仅填 0-100 整数", strength["description"])
-        self.assertTrue(teeth["requires_mask"])
-        self.assertEqual(teeth["recommended_mask_prompt"], "teeth")
+        self.assertTrue(skin_smooth["requires_mask"])
+        self.assertEqual(skin_smooth["recommended_mask_prompt"], "skin")
 
     def test_parse_request_compact_catalog_omits_param_details(self) -> None:
         full_catalog = export_tool_catalog()
@@ -80,7 +80,7 @@ class ModelContextTest(unittest.TestCase):
     def test_compact_request_and_analysis_helpers_keep_decision_fields(self) -> None:
         compact_intent = compact_request_intent_for_model(
             {
-                "mode": "explicit",
+                "mode": "auto",
                 "requested_tools": [
                     {"op": "adjust_exposure", "region": "逆光脸部区域", "strength": 0.2, "params": {}}
                 ],
@@ -101,10 +101,10 @@ class ModelContextTest(unittest.TestCase):
             [{"key": "style", "value": "natural", "confidence": 0.8, "source": "accepted_result"}]
         )
         compact_plan = compact_plan_for_model(
-            {"mode": "explicit", "operations": [{"op": "adjust_exposure", "region": "whole_image", "params": {"strength": 0.2}}]}
+            {"mode": "auto", "operations": [{"op": "adjust_exposure", "region": "whole_image", "params": {"strength": 0.2}}]}
         )
 
-        self.assertEqual(compact_intent["mode"], "explicit")
+        self.assertEqual(compact_intent["mode"], "auto")
         self.assertEqual(compact_analysis["domain"], "portrait")
         self.assertEqual(compact_prefs[0]["key"], "style")
         self.assertEqual(compact_plan["operations"][0]["op"], "adjust_exposure")

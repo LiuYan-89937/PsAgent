@@ -14,10 +14,10 @@ from app.tools.image_ops import apply_clarity_adjustment
 @tool
 def adjust_clarity(
     image_path: Annotated[str, Field(description="Runtime image path.")],
-    amount: Annotated[float, Field(default=0.5, ge=-1.0, le=1.0)] = 0.5,
+    amount: Annotated[float, Field(default=0.22, ge=-1.0, le=1.0)] = 0.22,
     radius_scale: Annotated[float, Field(default=1.0, ge=0.2, le=3.0)] = 1.0,
-    highlight_protection: Annotated[float, Field(default=0.22, ge=0.0, le=0.85)] = 0.22,
-    shadow_protection: Annotated[float, Field(default=0.22, ge=0.0, le=0.85)] = 0.22,
+    highlight_protection: Annotated[float, Field(default=0.34, ge=0.0, le=0.85)] = 0.34,
+    shadow_protection: Annotated[float, Field(default=0.3, ge=0.0, le=0.85)] = 0.3,
     feather_radius: Annotated[float, Field(default=18.0, ge=0.0, le=64.0)] = 18.0,
     mask_path: Annotated[str | None, Field(description="Optional runtime mask path.")] = None,
 ) -> dict:
@@ -57,7 +57,7 @@ ADJUST_CLARITY_SPEC = ToolSpec(
     focus_affinity=["subject_cleanup"],
     supports_mask=True,
     supports_whole_image=True,
-    default_params={"amount": 0.5, "radius_scale": 1.0, "highlight_protection": 0.22, "shadow_protection": 0.22, "feather_radius": 18.0},
+    default_params={"amount": 0.22, "radius_scale": 1.0, "highlight_protection": 0.34, "shadow_protection": 0.3, "feather_radius": 18.0},
     planner_schema=build_planner_schema(adjust_clarity, supports_mask=True, mask_schema=MASK_PARAMS_SCHEMA, excluded_fields={"image_path", "mask_path"}),
     primary_param="amount",
     risk_level="low",

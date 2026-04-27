@@ -30,7 +30,6 @@ from app.tools.adjust_curves import ADJUST_CURVES_SPEC, adjust_curves
 from app.tools.adjust_defringe import ADJUST_DEFRINGE_SPEC, adjust_defringe
 from app.tools.adjust_dehaze import ADJUST_DEHAZE_SPEC, adjust_dehaze
 from app.tools.adjust_exposure import ADJUST_EXPOSURE_SPEC, adjust_exposure
-from app.tools.adjust_eye_brighten import ADJUST_EYE_BRIGHTEN_SPEC, adjust_eye_brighten
 from app.tools.adjust_face_color_cleanup import ADJUST_FACE_COLOR_CLEANUP_SPEC, adjust_face_color_cleanup
 from app.tools.adjust_glow_highlights import ADJUST_GLOW_HIGHLIGHTS_SPEC, adjust_glow_highlights
 from app.tools.adjust_grain import ADJUST_GRAIN_SPEC, adjust_grain
@@ -38,7 +37,6 @@ from app.tools.adjust_hair_enhance import ADJUST_HAIR_ENHANCE_SPEC, adjust_hair_
 from app.tools.adjust_highlights_shadows import ADJUST_HIGHLIGHTS_SHADOWS_SPEC, adjust_highlights_shadows
 from app.tools.adjust_hue_saturation import ADJUST_HUE_SATURATION_SPEC, adjust_hue_saturation
 from app.tools.adjust_levels import ADJUST_LEVELS_SPEC, adjust_levels
-from app.tools.adjust_lip_enhance import ADJUST_LIP_ENHANCE_SPEC, adjust_lip_enhance
 from app.tools.adjust_local_contrast import ADJUST_LOCAL_CONTRAST_SPEC, adjust_local_contrast
 from app.tools.adjust_midtones import ADJUST_MIDTONES_SPEC, adjust_midtones
 from app.tools.adjust_moire_reduction import ADJUST_MOIRE_REDUCTION_SPEC, adjust_moire_reduction
@@ -57,10 +55,8 @@ from app.tools.adjust_soften_local_contrast import (
     ADJUST_SOFTEN_LOCAL_CONTRAST_SPEC,
     adjust_soften_local_contrast,
 )
-from app.tools.adjust_teeth_whiten import ADJUST_TEETH_WHITEN_SPEC, adjust_teeth_whiten
 from app.tools.adjust_temperature_tint import ADJUST_TEMPERATURE_TINT_SPEC, adjust_temperature_tint
 from app.tools.adjust_texture import ADJUST_TEXTURE_SPEC, adjust_texture
-from app.tools.adjust_under_eye_brighten import ADJUST_UNDER_EYE_BRIGHTEN_SPEC, adjust_under_eye_brighten
 from app.tools.adjust_vibrance_saturation import (
     ADJUST_VIBRANCE_SATURATION_SPEC,
     adjust_vibrance_saturation,
@@ -186,10 +182,6 @@ EFFECT_TOOL_SPECS: tuple[ToolSpec, ...] = (
 PORTRAIT_NATIVE_TOOLS: tuple[BaseTool, ...] = (
     adjust_skin_smooth,
     adjust_skin_brightness,
-    adjust_under_eye_brighten,
-    adjust_teeth_whiten,
-    adjust_eye_brighten,
-    adjust_lip_enhance,
     adjust_hair_enhance,
     adjust_face_color_cleanup,
 )
@@ -197,10 +189,6 @@ PORTRAIT_NATIVE_TOOLS: tuple[BaseTool, ...] = (
 PORTRAIT_TOOL_SPECS: tuple[ToolSpec, ...] = (
     ADJUST_SKIN_SMOOTH_SPEC,
     ADJUST_SKIN_BRIGHTNESS_SPEC,
-    ADJUST_UNDER_EYE_BRIGHTEN_SPEC,
-    ADJUST_TEETH_WHITEN_SPEC,
-    ADJUST_EYE_BRIGHTEN_SPEC,
-    ADJUST_LIP_ENHANCE_SPEC,
     ADJUST_HAIR_ENHANCE_SPEC,
     ADJUST_FACE_COLOR_CLEANUP_SPEC,
 )

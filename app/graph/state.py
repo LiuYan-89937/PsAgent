@@ -12,12 +12,13 @@ from app.tools import validate_tool_name
 
 
 Domain = Literal["portrait", "landscape", "food", "document", "general"]
-EditMode = Literal["explicit", "auto"]
+EditMode = Literal["auto"]
 ExecutorKind = Literal["deterministic", "generative", "hybrid"]
 FocusKey = Literal["global_tone", "subject_separation", "subject_cleanup", "finish"]
-CandidateSource = Literal["model", "rule", "variant", "noop", "direct", "recovery"]
+CandidateSource = Literal["model", "rule", "variant", "noop", "recovery"]
 RoundAction = Literal["keep", "recover_same_round", "stop_round"]
 SearchEffort = Literal["standard", "high", "ultra"]
+ReviewDecision = Literal["accept", "continue_auto", "request_human_review"]
 
 
 class GraphInputState(TypedDict, total=False):
@@ -145,6 +146,7 @@ class RequestGoal(BaseModel):
     """Goal-level request intent that is not tied to one concrete tool."""
 
     kind: str
+    focus: FocusKey
     target_region: str = "whole_image"
     priority: int = Field(default=50, ge=0, le=100)
     intensity: float | None = Field(default=None, ge=-1.0, le=1.0)
@@ -197,8 +199,10 @@ class CriticResult(BaseModel):
     issues: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     summary: str = ""
-    should_continue_editing: bool = False
-    should_request_review: bool = False
+    decision: ReviewDecision = "accept"
+    next_focus: FocusKey | None = None
+    correction_objective: str = ""
+    decision_reason: str = ""
 
 
 class ExecutionTraceItem(BaseModel):
@@ -355,8 +359,10 @@ class EvaluationReport(BaseModel):
     issues: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     summary: str = ""
-    should_continue_editing: bool = False
-    should_request_review: bool = False
+    decision: ReviewDecision = "accept"
+    next_focus: FocusKey | None = None
+    correction_objective: str = ""
+    decision_reason: str = ""
 
 
 class EditOperation(BaseModel):

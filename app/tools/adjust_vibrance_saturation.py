@@ -25,12 +25,12 @@ def adjust_vibrance_saturation(
     strength: Annotated[
         float,
         Field(
-            default=0.5,
+            default=0.28,
             ge=0.0,
             le=1.0,
             description="Primary color push strength. 0.2=light visible, 0.5=obvious, 0.8=strong.",
         ),
-    ] = 0.5,
+    ] = 0.28,
     vibrance_scale: Annotated[
         float,
         Field(
@@ -43,39 +43,39 @@ def adjust_vibrance_saturation(
     saturation_scale: Annotated[
         float,
         Field(
-            default=0.28,
+            default=0.2,
             ge=0.0,
             le=0.6,
             description="Additional global saturation lift layered on top of vibrance.",
         ),
-    ] = 0.28,
+    ] = 0.2,
     protect_highlights: Annotated[
-        float,
-        Field(
-            default=0.26,
-            ge=0.0,
-            le=0.8,
-            description="Highlight protection that restrains color boosts in bright areas.",
-        ),
-    ] = 0.26,
-    protect_skin: Annotated[
         float,
         Field(
             default=0.34,
             ge=0.0,
             le=0.8,
-            description="Skin-tone protection weight to avoid plastic or oversaturated skin.",
+            description="Highlight protection that restrains color boosts in bright areas.",
         ),
     ] = 0.34,
+    protect_skin: Annotated[
+        float,
+        Field(
+            default=0.46,
+            ge=0.0,
+            le=0.8,
+            description="Skin-tone protection weight to avoid plastic or oversaturated skin.",
+        ),
+    ] = 0.46,
     protect_shadows: Annotated[
         float,
         Field(
-            default=0.24,
+            default=0.34,
             ge=0.0,
             le=0.8,
             description="Shadow protection weight to keep dark chroma noise under control.",
         ),
-    ] = 0.24,
+    ] = 0.34,
     feather_radius: Annotated[
         float,
         Field(
@@ -144,12 +144,12 @@ ADJUST_VIBRANCE_SATURATION_SPEC = ToolSpec(
     supports_mask=True,
     supports_whole_image=True,
     default_params={
-        "strength": 0.5,
+        "strength": 0.28,
         "vibrance_scale": 0.8,
-        "saturation_scale": 0.28,
-        "protect_highlights": 0.26,
-        "protect_skin": 0.34,
-        "protect_shadows": 0.24,
+        "saturation_scale": 0.2,
+        "protect_highlights": 0.34,
+        "protect_skin": 0.46,
+        "protect_shadows": 0.34,
         "feather_radius": 18.0,
     },
     planner_schema=build_planner_schema(

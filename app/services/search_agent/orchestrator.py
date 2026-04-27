@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -16,7 +18,6 @@ from app.graph.state import (
     ObjectiveCard,
     ObjectiveGap,
     RecoveryDecision,
-    RequestIntent,
     RoundGuidance,
     SearchCandidateArtifact,
     SearchRoundArtifact,
@@ -30,16 +31,17 @@ from app.services.search_agent.planner import (
     RECOVERY_CANDIDATE_COUNT,
     RECOVERY_PREVIEW_STEP_LIMIT,
     build_stop_candidate,
-    generate_direct_candidate,
 )
+from app.services.search_agent.candidate_review_model import review_candidate_batch
 from app.services.search_agent.round_guidance_model import generate_round_guidance
 from app.services.search_agent.reviewer import review_candidate, review_round
 from app.services.search_agent.config import HARD_MAX_ROUNDS, resolve_search_round_limits
-from app.services.tool_runtime import execute_chain, execute_preview
+from app.services.tool_runtime import execute_chain, execute_preview, merge_mask_catalogs
 
 
 DEFAULT_MAX_ROUNDS = resolve_search_round_limits("standard").max_rounds
 DEFAULT_MIN_ROUNDS = resolve_search_round_limits("standard").min_rounds
+DEFAULT_PREVIEW_CONCURRENCY = 3
 FOCUS_REFINEMENT_ORDER: tuple[FocusKey, ...] = ("global_tone", "subject_separation", "subject_cleanup")
 REFINEMENT_GAP_LABELS: dict[FocusKey, str] = {
     "global_tone": "继续细化整体明暗、对比和色彩基线。",
@@ -150,14 +152,45 @@ def _candidate_artifact(
     )
 
 
-def _select_best(artifacts: list[SearchCandidateArtifact]) -> SearchCandidateArtifact:
+def _has_preview_failure(artifact: SearchCandidateArtifact) -> bool:
+    execution = artifact.preview_execution
+    return bool(execution and any(item.ok is False for item in execution.execution_trace))
+
+
+def _preview_fallback_count(artifact: SearchCandidateArtifact) -> int:
+    execution = artifact.preview_execution
+    if execution is None:
+        return 0
+    return len(execution.fallback_trace) + sum(1 for item in execution.execution_trace if item.fallback_used)
+
+
+def _selection_key(artifact: SearchCandidateArtifact, *, preferred_candidate_id: str | None) -> tuple[float, int, int, int, int, int, int]:
+    review = artifact.review
+    program = artifact.program
+    action_rank = {"recover_same_round": 0, "stop_round": 1, "keep": 2}.get(review.recommended_action if review else "", 0)
+    issue_count = len(review.issues if review else [])
+    fallback_count = _preview_fallback_count(artifact)
+    step_count = len(program.steps) if program is not None else 0
+    preferred_bonus = 1 if preferred_candidate_id and artifact.candidate_id == preferred_candidate_id else 0
+    return (
+        review.score if review is not None else float("-inf"),
+        action_rank,
+        0 if _has_preview_failure(artifact) else 1,
+        -issue_count,
+        -fallback_count,
+        step_count,
+        preferred_bonus,
+    )
+
+
+def _select_best(
+    artifacts: list[SearchCandidateArtifact],
+    *,
+    preferred_candidate_id: str | None = None,
+) -> SearchCandidateArtifact:
     return max(
         artifacts,
-        key=lambda item: (
-            item.review.score if item.review is not None else float("-inf"),
-            -len(item.review.issues if item.review is not None else []),
-            -(len(item.program.steps) if item.program is not None else 0),
-        ),
+        key=lambda item: _selection_key(item, preferred_candidate_id=preferred_candidate_id),
     )
 
 
@@ -165,7 +198,7 @@ def _dump_trace_items(items: list[Any]) -> list[dict[str, Any]]:
     return [item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item) for item in items]
 
 
-def _build_result_payload(*, state: SearchRunState, objective: ObjectiveCard, mode: str) -> dict[str, Any]:
+def _build_result_payload(*, state: SearchRunState, objective: ObjectiveCard) -> dict[str, Any]:
     search_run = SearchRunArtifact(
         objective_card=objective,
         rounds=state.rounds,
@@ -182,7 +215,7 @@ def _build_result_payload(*, state: SearchRunState, objective: ObjectiveCard, mo
         "rounds": state.rounds,
         "search_run": search_run,
         "selected_candidate_id": state.selected_candidate_id,
-        "edit_plan": _flatten_edit_plan(objective=objective, mode=mode, committed_programs=state.committed_programs),
+        "edit_plan": _flatten_edit_plan(objective=objective, committed_programs=state.committed_programs),
         "mask_catalog": state.mask_catalog.model_dump(mode="json"),
     }
 
@@ -274,58 +307,151 @@ def _generate_guidance_or_stop(
         )
 
 
+def _preview_concurrency(candidate_count: int) -> int:
+    try:
+        configured = int(os.getenv("PSAGENT_PREVIEW_CONCURRENCY", str(DEFAULT_PREVIEW_CONCURRENCY)))
+    except ValueError:
+        configured = DEFAULT_PREVIEW_CONCURRENCY
+    return max(1, min(candidate_count, configured))
+
+
+def _preview_one_candidate(
+    *,
+    input_image_path: str,
+    program: CandidateProgram,
+    mask_catalog: MaskCatalog,
+    round_id: str,
+    max_steps: int,
+) -> tuple[SearchCandidateArtifact, MaskCatalog]:
+    preview_result = execute_preview(
+        input_image_path=input_image_path,
+        program=program,
+        mask_catalog=mask_catalog,
+        round_id=round_id,
+        max_steps=max_steps,
+    )
+    preview_execution = preview_result.to_candidate_execution()
+    review = review_candidate(program=program, execution=preview_execution)
+    artifact = _candidate_artifact(
+        program=program,
+        selected=False,
+        preview_execution=preview_execution,
+        review=review,
+    )
+    return artifact, preview_result.mask_catalog
+
+
+def _apply_batch_candidate_review(
+    *,
+    current_image_path: str,
+    objective: ObjectiveCard,
+    focus: FocusKey,
+    round_gaps: list[ObjectiveGap],
+    guidance: RoundGuidance,
+    artifacts: list[SearchCandidateArtifact],
+) -> tuple[list[SearchCandidateArtifact], str | None]:
+    try:
+        batch_review = review_candidate_batch(
+            current_image_path=current_image_path,
+            objective_summary=objective.summary,
+            focus=focus,
+            round_gaps=round_gaps,
+            guidance=guidance,
+            artifacts=artifacts,
+        )
+    except Exception:
+        batch_review = None
+    if batch_review is None:
+        return artifacts, None
+
+    updated_artifacts: list[SearchCandidateArtifact] = []
+    for artifact in artifacts:
+        if artifact.candidate_id in batch_review.reviews:
+            artifact.review = batch_review.reviews[artifact.candidate_id]
+        eliminated_reason = batch_review.eliminated_reasons.get(artifact.candidate_id)
+        if eliminated_reason:
+            artifact.eliminated_reason = eliminated_reason
+        updated_artifacts.append(artifact)
+    return updated_artifacts, batch_review.selected_candidate_id
+
+
 def _run_preview_candidates(
     *,
     input_image_path: str,
     programs: list[CandidateProgram],
     mask_catalog: MaskCatalog,
     round_id: str,
+    objective: ObjectiveCard,
+    round_gaps: list[ObjectiveGap],
+    guidance: RoundGuidance,
     writer,
     max_steps: int,
-) -> list[SearchCandidateArtifact]:
-    artifacts: list[SearchCandidateArtifact] = []
-    for program in programs:
-        writer(
-            {
-                "event": "candidate_preview_started",
-                "round": round_id,
-                "focus": program.focus,
-                "message": f"开始预览候选：{program.label}",
-                "payload": {"candidate_id": program.id, "max_steps": max_steps},
-            }
-        )
-        preview_result = execute_preview(
-            input_image_path=input_image_path,
-            program=program,
-            mask_catalog=mask_catalog,
-            round_id=round_id,
-            max_steps=max_steps,
-        )
-        preview_execution = preview_result.to_candidate_execution()
-        review = review_candidate(program=program, execution=preview_execution)
-        artifacts.append(
-            _candidate_artifact(
-                program=program,
-                selected=False,
-                preview_execution=preview_execution,
-                review=review,
+) -> tuple[list[SearchCandidateArtifact], MaskCatalog]:
+    artifacts_by_index: dict[int, SearchCandidateArtifact] = {}
+    mask_catalogs: list[MaskCatalog] = []
+    if not programs:
+        return [], mask_catalog
+
+    max_workers = _preview_concurrency(len(programs))
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="psagent-preview") as executor:
+        futures = {}
+        for index, program in enumerate(programs):
+            writer(
+                {
+                    "event": "candidate_preview_started",
+                    "round": round_id,
+                    "focus": program.focus,
+                    "message": f"开始预览候选：{program.label}",
+                    "payload": {"candidate_id": program.id, "max_steps": max_steps},
+                }
             )
-        )
-        writer(
-            {
-                "event": "candidate_preview_finished",
-                "round": round_id,
-                "focus": program.focus,
-                "message": f"候选预览完成：{program.label}",
-                "payload": {"candidate_id": program.id, "score": review.score, "recommended_action": review.recommended_action},
-            }
-        )
-    selected = _select_best(artifacts)
+            future = executor.submit(
+                _preview_one_candidate,
+                input_image_path=input_image_path,
+                program=program,
+                mask_catalog=mask_catalog,
+                round_id=round_id,
+                max_steps=max_steps,
+            )
+            futures[future] = index
+
+        for future in as_completed(futures):
+            index = futures[future]
+            artifact, candidate_mask_catalog = future.result()
+            artifacts_by_index[index] = artifact
+            mask_catalogs.append(candidate_mask_catalog)
+            program = programs[index]
+            review = artifact.review
+            writer(
+                {
+                    "event": "candidate_preview_finished",
+                    "round": round_id,
+                    "focus": program.focus,
+                    "message": f"候选预览完成：{program.label}",
+                    "payload": {
+                        "candidate_id": program.id,
+                        "score": review.score if review else 0,
+                        "recommended_action": review.recommended_action if review else "discard",
+                    },
+                }
+            )
+
+    artifacts = [artifacts_by_index[index] for index in range(len(programs))]
+    merged_catalog = merge_mask_catalogs(mask_catalog, *mask_catalogs)
+    artifacts, preferred_candidate_id = _apply_batch_candidate_review(
+        current_image_path=input_image_path,
+        objective=objective,
+        focus=programs[0].focus,
+        round_gaps=round_gaps,
+        guidance=guidance,
+        artifacts=artifacts,
+    )
+    selected = _select_best(artifacts, preferred_candidate_id=preferred_candidate_id)
     for artifact in artifacts:
         artifact.selected = artifact.candidate_id == selected.candidate_id
         if not artifact.selected:
-            artifact.eliminated_reason = artifact.review.summary if artifact.review is not None else "候选得分较低。"
-    return artifacts
+            artifact.eliminated_reason = artifact.eliminated_reason or (artifact.review.summary if artifact.review is not None else "候选得分较低。")
+    return artifacts, merged_catalog
 
 
 def _commit_program(
@@ -397,11 +523,14 @@ def _run_recovery_if_needed(
     )
     _emit_round_guidance(writer=writer, round_id=round_id, focus=focus, guidance=guidance)
     recovery_programs = guidance.candidate_programs
-    recovery_artifacts = _run_preview_candidates(
+    recovery_artifacts, state.mask_catalog = _run_preview_candidates(
         input_image_path=state.current_image,
         programs=recovery_programs,
         mask_catalog=state.mask_catalog,
         round_id=round_id,
+        objective=objective,
+        round_gaps=recovery_gaps,
+        guidance=guidance,
         writer=writer,
         max_steps=RECOVERY_PREVIEW_STEP_LIMIT,
     )
@@ -428,13 +557,13 @@ def _run_recovery_if_needed(
     return recovery_full, updated_review, recovery_decision, recovery_artifacts
 
 
-def _flatten_edit_plan(*, objective: ObjectiveCard, mode: str, committed_programs: list[CandidateProgram]) -> EditPlan:
+def _flatten_edit_plan(*, objective: ObjectiveCard, committed_programs: list[CandidateProgram]) -> EditPlan:
     operations: list[EditOperation] = []
     for program in committed_programs:
         for step in program.steps:
             operations.append(EditOperation.model_validate(step.model_dump(mode="json")))
     return EditPlan(
-        mode="auto" if mode == "auto" else "explicit",
+        mode="auto",
         domain=objective.domain,
         executor="deterministic",
         preserve=list(objective.preserve),
@@ -493,11 +622,14 @@ def _run_auto_round(
     _emit_round_guidance(writer=writer, round_id=rid, focus=focus, guidance=guidance)
     programs = guidance.candidate_programs
     _emit_generated_candidates(writer=writer, round_id=rid, focus=focus, programs=programs, candidate_count=len(programs))
-    artifacts = _run_preview_candidates(
+    artifacts, state.mask_catalog = _run_preview_candidates(
         input_image_path=state.current_image,
         programs=programs,
         mask_catalog=state.mask_catalog,
         round_id=rid,
+        objective=objective,
+        round_gaps=round_gaps,
+        guidance=guidance,
         writer=writer,
         max_steps=CANDIDATE_PREVIEW_STEP_LIMIT,
     )
@@ -550,81 +682,10 @@ def _run_auto_round(
     return focus == "finish" or (round_review is not None and round_review.recommended_action == "stop_round" and selected_program.source == "noop")
 
 
-def _direct_round(
-    *,
-    input_image_path: str,
-    objective: ObjectiveCard,
-    request_intent: RequestIntent | None,
-    mask_catalog: MaskCatalog,
-    writer,
-) -> tuple[list[SearchRoundArtifact], str, list[str], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], MaskCatalog, list[CandidateProgram]]:
-    program = generate_direct_candidate(request_intent=request_intent, objective=objective)
-    rid = _round_id(1, program.focus)
-    writer({"event": "round_started", "round": rid, "focus": program.focus, "message": "开始显式直接执行轮"})
-    writer(
-        {
-            "event": "candidate_generated",
-            "round": rid,
-            "focus": program.focus,
-            "message": "已生成直接执行候选",
-            "payload": {"candidate_id": program.id, "candidate_count": 1},
-        }
-    )
-    writer(
-        {
-            "event": "candidate_selected",
-            "round": rid,
-            "focus": program.focus,
-            "message": "显式模式选中直接执行候选",
-            "payload": {"candidate_id": program.id},
-        }
-    )
-    full_execution, mask_catalog, outputs = _commit_program(
-        input_image_path=input_image_path,
-        program=program,
-        mask_catalog=mask_catalog,
-        round_id=rid,
-        writer=writer,
-        mode="explicit",
-    )
-    review = review_candidate(program=program, execution=full_execution)
-    round_review = review_round(selected_review=review, full_execution=full_execution)
-    round_artifact = SearchRoundArtifact(
-        id=rid,
-        index=1,
-        focus=program.focus,
-        input_image_path=input_image_path,
-        output_image_path=full_execution.output_image_path or input_image_path,
-        objective_gaps=list(objective.gaps),
-        candidates=[
-            _candidate_artifact(program=program, selected=True, preview_execution=None, review=review)
-        ],
-        selected_candidate_id=program.id,
-        selected_full_execution=full_execution,
-        round_review=round_review,
-        recovery_decision=RecoveryDecision(triggered=False, source="none"),
-        completed=True,
-    )
-    writer({"event": "round_review_finished", "round": rid, "focus": program.focus, "message": round_review.summary})
-    writer({"event": "round_completed", "round": rid, "focus": program.focus, "message": "显式直接执行轮完成"})
-    return (
-        [round_artifact],
-        full_execution.output_image_path or input_image_path,
-        outputs,
-        [item.model_dump(mode="json") for item in full_execution.execution_trace],
-        [item.model_dump(mode="json") for item in full_execution.segmentation_trace],
-        [item.model_dump(mode="json") for item in full_execution.fallback_trace],
-        mask_catalog,
-        [program],
-    )
-
-
 def run_search_first_agent(
     *,
     input_image_path: str,
     objective: ObjectiveCard,
-    request_intent: RequestIntent | None,
-    mode: str,
     mask_catalog: MaskCatalog | None = None,
     tool_catalog: list[dict[str, Any]] | None = None,
     writer=None,
@@ -632,34 +693,10 @@ def run_search_first_agent(
     min_rounds: int | None = None,
     max_rounds: int | None = None,
 ) -> dict[str, Any]:
-    """Run either explicit direct execution or auto round-first search."""
+    """Run the search-first round orchestrator."""
 
     writer = _event_writer(writer)
     runtime_catalog = mask_catalog or MaskCatalog()
-    if mode != "auto":
-        rounds, selected_output, outputs, execution_trace, segmentation_trace, fallback_trace, runtime_catalog, committed = _direct_round(
-            input_image_path=input_image_path,
-            objective=objective,
-            request_intent=request_intent,
-            mask_catalog=runtime_catalog,
-            writer=writer,
-        )
-        return _build_result_payload(
-            state=SearchRunState(
-                current_image=selected_output,
-                mask_catalog=runtime_catalog,
-                rounds=rounds,
-                candidate_outputs=outputs,
-                execution_trace=execution_trace,
-                segmentation_trace=segmentation_trace,
-                fallback_trace=fallback_trace,
-                committed_programs=committed,
-                selected_candidate_id=rounds[-1].selected_candidate_id,
-            ),
-            objective=objective,
-            mode=mode,
-        )
-
     focus_counts: dict[FocusKey, int] = {}
     state = SearchRunState(current_image=input_image_path, mask_catalog=runtime_catalog)
     runtime_tool_catalog = list(tool_catalog or [])
@@ -688,4 +725,4 @@ def run_search_first_agent(
         if should_stop and local_round_index >= min_round_limit:
             break
 
-    return _build_result_payload(state=state, objective=objective, mode=mode)
+    return _build_result_payload(state=state, objective=objective)
